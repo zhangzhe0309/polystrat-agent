@@ -29,6 +29,11 @@ from adaptive_weights import calculate_adaptive_weights, load_trade_history
 from ml_optimizer import get_ml_signal
 from multi_platform import get_multiplatform_signal
 from smart_keywords import get_search_queries
+from dynamic_optimizer import (
+    calculate_llm_model_weights, get_llm_model_weight,
+    get_news_source_quota, calculate_position_with_liquidity,
+    get_dynamic_price_thresholds, get_dynamic_dedup_hours,
+    format_optimization_report)
 
 # === 配置 ===
 # LLM Ensemble 链：Qwen 3.5 + Kimi K2.6 + Llama 3.3 70B（三模型投票）
@@ -427,7 +432,7 @@ def format_output(decisions):
 
 
 def main():
-    """主流程（集成新闻搜索、情感分析、风险管理、自适应权重）"""
+    """主流程（集成新闻搜索、情感分析、风险管理、自适应权重 + 动态优化）"""
     # 1. 获取活跃市场（取前10个，减少处理时间）
     markets = fetch_active_markets(limit=10)
     if not markets:
@@ -443,14 +448,20 @@ def main():
     trade_history = load_trade_history()
     adaptive_weights = calculate_adaptive_weights(trade_history)
     
-    # === 修复：构建已交易市场集合（DEDUP_HOURS小时内） ===
+    # === 动态优化：LLM 模型权重 + 价格阈值 ===
+    llm_model_weights = calculate_llm_model_weights(trade_history)
+    dynamic_thresholds = get_dynamic_price_thresholds(trade_history)
+    
+    # === 修复：构建已交易市场集合（动态去重窗口） ===
     traded_markets_24h = set()
     now = datetime.now(timezone.utc)
     for t in trade_history:
         try:
             trade_time = datetime.fromisoformat(t.get("timestamp", "").replace("Z", "+00:00"))
             hours_ago = (now - trade_time).total_seconds() / 3600
-            if hours_ago < DEDUP_HOURS:
+            # 使用动态去重窗口
+            dedup_hours = get_dynamic_dedup_hours(t.get("end_date", ""))
+            if hours_ago < dedup_hours:
                 traded_markets_24h.add(t.get("market", ""))
         except:
             pass
@@ -461,11 +472,21 @@ def main():
     onchain_weight = adaptive_weights.get("onchain_weight", 0.2)
     edge_threshold = adaptive_weights.get("edge_threshold", EDGE_THRESHOLD)
     
-    # 输出权重配置
+    # 输出权重配置（包含动态优化信息）
     print(f"⚖️ 自适应权重配置:")
     print(f"   LLM: {llm_weight:.3f} | 情感: {sentiment_weight:.3f} | 链上: {onchain_weight:.3f}")
     print(f"   优势阈值: {edge_threshold:.2%}")
     print(f"   样本大小: {adaptive_weights.get('sample_size', 0)}")
+    print()
+    
+    # 输出 LLM 模型动态权重
+    print(f"🤖 LLM 模型动态权重:")
+    for model, weight in llm_model_weights.items():
+        print(f"   {model}: {weight:.1%}")
+    print()
+    
+    # 输出动态价格阈值
+    print(f"💰 动态价格阈值: {dynamic_thresholds['min_price']:.0%} - {dynamic_thresholds['max_price']:.0%}")
     print()
 
     for market in markets:
@@ -475,7 +496,7 @@ def main():
         liquidity = market.get("liquidity", 0)
 
         # 跳过极端价格（>97¢ 或 <3¢ 的市场没太大空间）
-        if yes_price > 0.97 or yes_price < 0.03:
+        if yes_price > dynamic_thresholds["max_price"] or yes_price < dynamic_thresholds["min_price"]:
             continue
 
         # 跳过低流动性市场
@@ -639,9 +660,14 @@ def main():
 
         # 8. 如果优势足够大，且通过风险检查，下单
         if abs(edge) >= edge_threshold and trades_made < MAX_TRADES_PER_RUN and token_id and should_trade_flag:
-            # 计算仓位大小
-            position_size = calculate_position_size(balance, sentiment_confidence, category)
-            position_size = min(position_size, BET_AMOUNT)  # 限制单笔金额
+            # 计算仓位大小（使用流动性适配版本）
+            position_size = calculate_position_with_liquidity(
+                balance, 
+                sentiment_confidence, 
+                liquidity,
+                base_amount=BET_AMOUNT
+            )
+            position_size = min(position_size, BET_AMOUNT * 2)  # 限制单笔金额
             
             result = place_order(token_id, "BUY", position_size, order_price)
             decision["order_result"] = result
@@ -684,6 +710,13 @@ def main():
         print(f"   风险等级: {risk_report['risk_level']}")
     except Exception as e:
         print(f"⚠️ 风险报告生成失败: {e}")
+        print(output)
+    
+    # 输出动态优化报告
+    try:
+        print(format_optimization_report())
+    except Exception as e:
+        print(f"⚠️ 优化报告生成失败: {e}")
         print(output)
 
 
