@@ -60,11 +60,32 @@ def load_trade_data():
 def extract_features(trades):
     """
     提取特征
+    
+    特征列表:
+    1. llm_prob: LLM 预测概率
+    2. sentiment_score: 新闻情感分数
+    3. abs(edge): 优势绝对值
+    4. market_price: 市场价格
+    5. direction: 方向 (Yes=1, No=0)
+    6. amount: 下注金额
+    7. final_prob: 综合概率
+    8. confidence: 仓位置信度
+    
+    标签定义:
+    - 1 = 已结算盈利 (result == "win")
+    - 0 = 已结算亏损 (result == "lose")
+    - 未结算交易: 排除（不参与训练）
     """
     features = []
     labels = []
     
     for trade in trades:
+        result = trade.get("result", "")
+        
+        # 只用已结算的交易做训练数据
+        if result not in ("win", "lose"):
+            continue
+        
         feature = [
             trade.get("llm_prob", 0.5),
             trade.get("sentiment_score", 0),
@@ -72,10 +93,11 @@ def extract_features(trades):
             trade.get("market_price", 0.5),
             1 if trade.get("direction") == "Yes" else 0,
             trade.get("amount", 2),
+            trade.get("final_prob", 0.5),
+            abs(trade.get("edge", 0)) * trade.get("amount", 2),  # 优势×金额
         ]
         
-        edge = trade.get("edge", 0)
-        label = 1 if abs(edge) > 0.05 else 0
+        label = 1 if result == "win" else 0
         
         features.append(feature)
         labels.append(label)
@@ -198,6 +220,14 @@ def optimize_with_ml():
     # 提取特征
     features, labels = extract_features(trades)
     
+    # 如果没有已结算的交易，无法训练
+    if len(features) < 2:
+        return {
+            "status": "数据不足",
+            "message": f"只有 {len(features)} 条已结算交易，需要至少 2 条",
+            "recommendation": "等待市场结算后重试"
+        }
+    
     # 训练集成模型
     print("   训练集成模型...")
     trained_models, scaler = train_ensemble_models(features, labels)
@@ -218,25 +248,31 @@ def optimize_with_ml():
     total_pnl = 0
     
     for i, trade in enumerate(trades):
+        if i >= len(features):  # 跳过未结算交易（已被 extract_features 过滤）
+            break
+        
         feature = features[i]
         ml_prob = predict_ensemble(trained_models, scaler, feature)
         
-        edge = trade.get("edge", 0)
-        actual = 1 if abs(edge) > 0.05 else 0
+        result = trade.get("result", "")
+        actual = labels[i]  # 使用真实标签
         predicted = 1 if ml_prob > 0.5 else 0
         
         if predicted == actual:
             correct += 1
         
-        if ml_prob > 0.6 and abs(edge) > 0.05:
-            total_pnl += trade.get("amount", 2) * abs(edge)
-        elif ml_prob < 0.4 and abs(edge) > 0.05:
-            total_pnl -= trade.get("amount", 2) * 0.1
+        # 模拟盈亏
+        edge = trade.get("edge", 0)
+        amount = trade.get("amount", 2)
+        if ml_prob > 0.6 and result == "win":
+            total_pnl += amount * abs(edge)
+        elif ml_prob > 0.6 and result == "lose":
+            total_pnl -= amount * 0.1  # 亏损惩罚
         
         total += 1
     
     # 特征重要性（使用 RandomForest）
-    feature_names = ["LLM概率", "情感分数", "优势", "市场价格", "方向", "金额"]
+    feature_names = ["LLM概率", "情感分数", "优势", "市场价格", "方向", "金额", "综合概率", "优势×金额"]
     if "random_forest" in trained_models:
         importance = trained_models["random_forest"]["model"].feature_importances_
         importance_ranking = sorted(zip(feature_names, importance), key=lambda x: -x[1])
@@ -257,9 +293,18 @@ def optimize_with_ml():
         "recommendation": "集成模型可用"
     }
 
-def get_ml_signal(llm_prob, sentiment_score, edge, market_price, direction, amount):
+def get_ml_signal(llm_prob, sentiment_score, edge, market_price, direction, amount, final_prob=None):
     """
     获取 ML 信号
+    
+    Args:
+        llm_prob: LLM 预测概率
+        sentiment_score: 情感分数
+        edge: 优势
+        market_price: 市场价格
+        direction: 方向 (Yes/No)
+        amount: 金额
+        final_prob: 综合概率（可选，默认等于 llm_prob）
     """
     # 尝试加载缓存模型
     trained_models, scaler = load_model()
@@ -278,8 +323,20 @@ def get_ml_signal(llm_prob, sentiment_score, edge, market_price, direction, amou
             "models_used": 0
         }
     
-    # 预测
-    feature = [llm_prob, sentiment_score, abs(edge), market_price, 1 if direction == "Yes" else 0, amount]
+    # 预测（8个特征，与 extract_features 一致）
+    if final_prob is None:
+        final_prob = llm_prob
+    
+    feature = [
+        llm_prob, 
+        sentiment_score, 
+        abs(edge), 
+        market_price, 
+        1 if direction == "Yes" else 0, 
+        amount,
+        final_prob,
+        abs(edge) * amount,  # 优势×金额
+    ]
     ml_prob = predict_ensemble(trained_models, scaler, feature)
     
     return {

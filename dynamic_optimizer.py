@@ -282,8 +282,19 @@ def get_dynamic_price_thresholds(trades=None, window_days=7):
     if len(trades) < 10:
         return config["price_thresholds"]
     
-    # 计算近期胜率
-    wins = sum(1 for t in trades if abs(t.get("edge", 0)) > 0.03)
+    # 计算近期胜率（基于结算结果或方向一致性）
+    wins = 0
+    for t in trades:
+        result = t.get("result", "")
+        direction = t.get("direction", "")
+        edge = t.get("edge", 0)
+        
+        if result == "win":
+            wins += 1
+        elif not result or result == "pending":
+            # 未结算：用方向一致性作弱代理
+            if (direction == "Yes" and edge > 0) or (direction == "No" and edge < 0):
+                wins += 1
     win_rate = wins / len(trades) if trades else 0.5
     
     # 根据胜率调整阈值

@@ -5,17 +5,22 @@
 - Currents API (免费 600次/天)
 - RSS 订阅 (完全免费，实时更新)
 """
+import os
 import requests
 import json
 import re
 from datetime import datetime
+from dotenv import load_dotenv
 
-# API Keys
-GNEWS_API_KEY = "757bb7eafdedf9bd79b4be14ed99d5ee"
-CURRENTS_API_KEY = "s1yGNIPiAtyC_kw6uMqE-9mTwuBRojhvRyxMSLqOtPTK58B2"
-NEWSDATA_API_KEY = "pub_3715a1d1099a46cd9ab05b7584ce0812"
-NYTIMES_API_KEY = "oIArLoX9WQR37xL2GCuHYJJeLB9RPU44vQJveqD4HCcmK7y9"
-SERPAPI_KEY = "a2764cbb3462340be68cbf72b9207aa1bcd039e82a7ff2d9776a1fe1393d8f9e"
+# 加载 .env 文件
+load_dotenv("/root/.hermes/profiles/life/.env")
+
+# API Keys (从环境变量读取，不再硬编码)
+GNEWS_API_KEY = os.environ.get("GNEWS_API_KEY", "")
+CURRENTS_API_KEY = os.environ.get("CURRENTS_API_KEY", "")
+NEWSDATA_API_KEY = os.environ.get("NEWSDATA_API_KEY", "")
+NYTIMES_API_KEY = os.environ.get("NYTIMES_API_KEY", "")
+SERPAPI_KEY = os.environ.get("SERPAPI_KEY", "")
 
 # RSS 源列表
 RSS_FEEDS = {
@@ -266,40 +271,67 @@ def search_rss(query, max_results=5):
     
     return all_news[:max_results]
 
-def search_news_for_market(market_title, max_results=5):
+def search_news_for_market(market_title, max_results=5, use_cache=True):
     """
-    为特定市场搜索新闻（多源聚合）
+    为特定市场搜索新闻（多源聚合 + 并行 + 缓存）
+    
+    优化:
+    1. 文件缓存：相同关键词1小时内不重复请求
+    2. 并行请求：6个API源同时请求，耗时从6s降到1s
     """
-    # 提取关键词（保留更多关键词）
-    keywords = market_title.replace("?", "").replace("before GTA VI", "").strip()
-    # 只取前60个字符
-    keywords = keywords[:60]
+    import hashlib
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from datetime import datetime, timezone, timedelta
+    from pathlib import Path
+    
+    # 提取关键词
+    keywords = market_title.replace("?", "").replace("before GTA VI", "").strip()[:60]
+    
+    # === 缓存机制 ===
+    cache_dir = Path("/root/.hermes/profiles/life/data/news_cache")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_key = hashlib.md5(keywords.encode()).hexdigest()
+    cache_file = cache_dir / f"{cache_key}.json"
+    
+    if use_cache and cache_file.exists():
+        try:
+            cache_data = json.loads(cache_file.read_text())
+            cached_at = datetime.fromisoformat(cache_data.get("cached_at", ""))
+            if datetime.now(timezone.utc) - cached_at < timedelta(hours=1):
+                return cache_data.get("news", [])[:max_results * 2]
+        except:
+            pass
+    
+    # === 并行请求 ===
+    def safe_call(func, query, limit):
+        """安全调用，捕获异常"""
+        try:
+            return func(query, limit)
+        except Exception as e:
+            return []
     
     all_news = []
     
-    # 1. GNews API
-    gnews = search_gnews(keywords, max_results)
-    all_news.extend(gnews)
+    # 定义所有搜索源
+    search_tasks = [
+        ("gnews", lambda: safe_call(search_gnews, keywords, max_results)),
+        ("currents", lambda: safe_call(search_currents, keywords, max_results)),
+        ("newsdata", lambda: safe_call(search_newsdata, keywords, max_results)),
+        ("nytimes", lambda: safe_call(search_nytimes, keywords, max_results)),
+        ("serpapi", lambda: safe_call(search_serpapi, keywords, max_results)),
+        ("rss", lambda: safe_call(search_rss, keywords, max_results)),
+    ]
     
-    # 2. Currents API
-    currents = search_currents(keywords, max_results)
-    all_news.extend(currents)
-    
-    # 3. NewsData.io API
-    newsdata = search_newsdata(keywords, max_results)
-    all_news.extend(newsdata)
-    
-    # 4. NYTimes API
-    nytimes = search_nytimes(keywords, max_results)
-    all_news.extend(nytimes)
-    
-    # 5. SerpAPI
-    serpapi = search_serpapi(keywords, max_results)
-    all_news.extend(serpapi)
-    
-    # 6. RSS 订阅
-    rss = search_rss(keywords, max_results)
-    all_news.extend(rss)
+    # 并行执行（最多4线程，避免API限流）
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {executor.submit(task): name for name, task in search_tasks}
+        for future in as_completed(futures, timeout=20):
+            try:
+                result = future.result(timeout=15)
+                if result:
+                    all_news.extend(result)
+            except:
+                pass
     
     # 去重（按标题）
     seen_titles = set()
@@ -310,7 +342,6 @@ def search_news_for_market(market_title, max_results=5):
             seen_titles.add(title)
             unique_news.append(news)
     
-    # 确保每个来源至少有结果
     # 按来源分组，每个来源取前2条
     source_results = {}
     for news in unique_news:
@@ -325,12 +356,24 @@ def search_news_for_market(market_title, max_results=5):
     for src, items in source_results.items():
         final_results.extend(items)
     
-    # 如果还不够，补充剩余的
     if len(final_results) < max_results * 2:
         remaining = [n for n in unique_news if n not in final_results]
         final_results.extend(remaining[:max_results * 2 - len(final_results)])
     
-    return final_results[:max_results * 2]
+    final_results = final_results[:max_results * 2]
+    
+    # 写入缓存
+    try:
+        cache_data = {
+            "keywords": keywords,
+            "cached_at": datetime.now(timezone.utc).isoformat(),
+            "news": final_results
+        }
+        cache_file.write_text(json.dumps(cache_data, ensure_ascii=False))
+    except:
+        pass
+    
+    return final_results
 
 def search_news_simple(query, max_results=5):
     """

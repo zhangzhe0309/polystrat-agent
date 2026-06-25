@@ -34,6 +34,7 @@ from dynamic_optimizer import (
     get_news_source_quota, calculate_position_with_liquidity,
     get_dynamic_price_thresholds, get_dynamic_dedup_hours,
     format_optimization_report)
+from polystrat_logger import log, log_error, log_api_call, log_performance
 
 # === 配置 ===
 # LLM Ensemble 链：Qwen 3.5 + Kimi K2.6 + Llama 3.3 70B（三模型投票）
@@ -328,15 +329,24 @@ def place_order(token_id, side, amount, price):
 
 
 def save_trade(trade_info):
-    """保存交易记录"""
-    trades = []
-    if TRADE_LOG.exists():
+    """保存交易记录（带文件锁，防止并发写入丢失数据）"""
+    import fcntl
+    lock_path = str(TRADE_LOG) + ".lock"
+    
+    # 获取文件锁
+    with open(lock_path, "w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)  # 排他锁
         try:
-            trades = json.loads(TRADE_LOG.read_text())
-        except:
-            pass
-    trades.append(trade_info)
-    TRADE_LOG.write_text(json.dumps(trades, indent=2, ensure_ascii=False))
+            trades = []
+            if TRADE_LOG.exists():
+                try:
+                    trades = json.loads(TRADE_LOG.read_text())
+                except:
+                    pass
+            trades.append(trade_info)
+            TRADE_LOG.write_text(json.dumps(trades, indent=2, ensure_ascii=False))
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)  # 释放锁
 
 
 def format_output(decisions):
@@ -433,6 +443,11 @@ def format_output(decisions):
 
 def main():
     """主流程（集成新闻搜索、情感分析、风险管理、自适应权重 + 动态优化）"""
+    import time as _time
+    start_time = _time.time()
+    log.info("=" * 50)
+    log.info("PolyStrat 启动")
+    
     # 1. 获取活跃市场（取前10个，减少处理时间）
     markets = fetch_active_markets(limit=10)
     if not markets:
@@ -462,7 +477,13 @@ def main():
             # 使用动态去重窗口
             dedup_hours = get_dynamic_dedup_hours(t.get("end_date", ""))
             if hours_ago < dedup_hours:
-                traded_markets_24h.add(t.get("market", ""))
+                # 使用 condition_id 作为去重键（比 title 更可靠）
+                cid = t.get("condition_id", "")
+                if cid:
+                    traded_markets_24h.add(cid)
+                else:
+                    # 兼容旧记录：无 condition_id 时用 title 小写去重
+                    traded_markets_24h.add(t.get("market", "").lower())
         except:
             pass
     
@@ -494,6 +515,7 @@ def main():
         yes_price = market["yes_price"]
         category = market.get("category", "Other")
         liquidity = market.get("liquidity", 0)
+        condition_id = market.get("condition_id", "")  # 唯一标识，用于去重
 
         # 跳过极端价格（>97¢ 或 <3¢ 的市场没太大空间）
         if yes_price > dynamic_thresholds["max_price"] or yes_price < dynamic_thresholds["min_price"]:
@@ -503,8 +525,9 @@ def main():
         if liquidity < MIN_LIQUIDITY:
             continue
         
-        # === 修复：跳过DEDUP_HOURS小时内已交易的市场 ===
-        if title in traded_markets_24h:
+        # === 修复：跳过DEDUP_HOURS小时内已交易的市场（用 condition_id 去重） ===
+        dedup_key = condition_id if condition_id else title.lower()
+        if dedup_key in traded_markets_24h:
             print(f"⏭️ 跳过已交易市场: {title[:40]}...")
             continue
 
@@ -661,22 +684,23 @@ def main():
         # 8. 如果优势足够大，且通过风险检查，下单
         if abs(edge) >= edge_threshold and trades_made < MAX_TRADES_PER_RUN and token_id and should_trade_flag:
             # 计算仓位大小（使用流动性适配版本）
+            # 内置硬上限: min(流动性调整, 余额5%, 基础仓位2倍)
             position_size = calculate_position_with_liquidity(
                 balance, 
                 sentiment_confidence, 
                 liquidity,
                 base_amount=BET_AMOUNT
             )
-            position_size = min(position_size, BET_AMOUNT * 2)  # 限制单笔金额
             
             result = place_order(token_id, "BUY", position_size, order_price)
             decision["order_result"] = result
 
-            # 记录交易
+            # 记录交易（包含 condition_id 用于去重）
             save_trade({
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "mode": "DRY_RUN" if DRY_RUN else "LIVE",
                 "market": title,
+                "condition_id": condition_id,
                 "category": category,
                 "direction": direction,
                 "market_price": yes_price if direction == "Yes" else market["no_price"],
@@ -687,7 +711,9 @@ def main():
                 "amount": position_size,
                 "status": result.get("status"),
                 "token_id": token_id,
-                "risk_reason": risk_reason
+                "risk_reason": risk_reason,
+                "end_date": market.get("end_date", ""),
+                "result": "pending"  # 初始状态：待结算
             })
             trades_made += 1
 
