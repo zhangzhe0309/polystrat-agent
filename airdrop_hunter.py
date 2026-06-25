@@ -16,9 +16,8 @@ from polystrat_logger import log, log_error
 CACHE_DIR = Path("/root/.hermes/profiles/life/data/airdrop_cache")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-# 已知空投数据源
+# 已知空投数据源（只使用可用的公开 API）
 AIRDROP_SOURCES = {
-    "airdrops_io": "https://airdrops.io/api/",
     "defillama": "https://api.llama.fi/protocols",
 }
 

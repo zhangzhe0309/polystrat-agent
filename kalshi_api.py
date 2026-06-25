@@ -11,6 +11,7 @@ import requests
 from datetime import datetime, timezone
 from pathlib import Path
 from polystrat_logger import log, log_error
+from retry_helper import retry_request
 
 # Kalshi API 配置
 KALSHI_API = "https://external-api.kalshi.com/trade-api/v2"
@@ -31,31 +32,29 @@ def get_markets(series_ticker=None, status="open", limit=20):
     Returns:
         list: 市场列表
     """
-    try:
-        params = {
-            "status": status,
-            "limit": limit
-        }
-        
-        if series_ticker:
-            params["series_ticker"] = series_ticker
-        
-        resp = requests.get(
-            f"{KALSHI_API}/markets",
-            params=params,
-            timeout=15
-        )
-        
-        if resp.status_code == 200:
-            data = resp.json()
-            markets = data.get("markets", [])
-            return [format_market(m) for m in markets]
-        else:
-            log_error("kalshi", f"获取市场失败: {resp.status_code}")
-            return []
-            
-    except Exception as e:
-        log_error("kalshi", e, "获取市场失败")
+    params = {
+        "status": status,
+        "limit": limit
+    }
+    
+    if series_ticker:
+        params["series_ticker"] = series_ticker
+    
+    # 使用重试机制
+    result = retry_request(
+        f"{KALSHI_API}/markets",
+        params=params,
+        max_retries=3,
+        base_delay=1,
+        timeout=15
+    )
+    
+    if result.get("success"):
+        data = result.get("data", {})
+        markets = data.get("markets", [])
+        return [format_market(m) for m in markets]
+    else:
+        log_error("kalshi", f"获取市场失败: {result.get('error')}")
         return []
 
 def get_market_by_ticker(ticker):
