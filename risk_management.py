@@ -133,7 +133,7 @@ def calculate_risk_score(market, confidence, news_sentiment=0):
                 risk_score += 0.3  # 临近到期风险更高
             elif days_left < 30:
                 risk_score += 0.1
-        except:
+        except Exception:
             pass
     
     # 4. 新闻情感风险

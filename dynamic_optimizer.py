@@ -49,7 +49,7 @@ def load_optimization_config():
         if OPTIMIZATION_CONFIG.exists():
             with open(OPTIMIZATION_CONFIG) as f:
                 return json.load(f)
-    except:
+    except Exception:
         pass
     return DEFAULT_CONFIG.copy()
 
@@ -68,7 +68,7 @@ def load_trade_history():
         if TRADE_LOG.exists():
             with open(TRADE_LOG) as f:
                 return json.load(f)
-    except:
+    except Exception:
         pass
     return []
 
@@ -85,7 +85,7 @@ def get_recent_trades(days=7):
                 dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                 if dt >= cutoff:
                     recent.append(t)
-        except:
+        except Exception:
             continue
     return recent
 
@@ -337,7 +337,7 @@ def get_dynamic_dedup_hours(end_date_str):
             return 48  # 远期市场，增加去重窗口
         else:
             return 24  # 正常
-    except:
+    except Exception:
         return 24
 
 # ============================================================

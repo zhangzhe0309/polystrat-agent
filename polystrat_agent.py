@@ -121,7 +121,7 @@ def fetch_active_markets(limit=20):
                 if len(price_list) < 1:
                     continue
                 yes_price = float(price_list[0])
-            except:
+            except Exception:
                 continue
 
             # 跳过极端价格（>97¢ 或 <3¢）- 扩大范围
@@ -134,7 +134,7 @@ def fetch_active_markets(limit=20):
                     token_list = json.loads(tokens)
                 else:
                     token_list = tokens
-            except:
+            except Exception:
                 token_list = []
 
             # 解析 outcomes
@@ -143,7 +143,7 @@ def fetch_active_markets(limit=20):
                     outcome_list = json.loads(outcomes)
                 else:
                     outcome_list = outcomes
-            except:
+            except Exception:
                 outcome_list = ["Yes", "No"]
 
             # 检测市场分类（扩展分类）
@@ -341,7 +341,7 @@ def save_trade(trade_info):
             if TRADE_LOG.exists():
                 try:
                     trades = json.loads(TRADE_LOG.read_text())
-                except:
+                except Exception:
                     pass
             trades.append(trade_info)
             TRADE_LOG.write_text(json.dumps(trades, indent=2, ensure_ascii=False))
@@ -414,7 +414,7 @@ def format_output(decisions):
                 dt = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
                 days_left = (dt - datetime.now(timezone.utc)).days
                 lines.append(f"   结算: {dt.strftime('%Y-%m-%d')} | 剩余{days_left}天")
-            except:
+            except Exception:
                 pass
 
         if abs(edge) >= EDGE_THRESHOLD and trades_made < MAX_TRADES_PER_RUN:
@@ -484,7 +484,7 @@ def main():
                 else:
                     # 兼容旧记录：无 condition_id 时用 title 小写去重
                     traded_markets_24h.add(t.get("market", "").lower())
-        except:
+        except Exception:
             pass
     
     # 使用自适应权重

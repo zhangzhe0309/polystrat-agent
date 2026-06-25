@@ -118,7 +118,7 @@ def get_recent_trades(trades, days=ROLLING_WINDOW_DAYS):
                 dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
                 if dt >= cutoff:
                     recent.append(trade)
-        except:
+        except Exception:
             continue
     
     return recent

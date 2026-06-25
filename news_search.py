@@ -299,7 +299,7 @@ def search_news_for_market(market_title, max_results=5, use_cache=True):
             cached_at = datetime.fromisoformat(cache_data.get("cached_at", ""))
             if datetime.now(timezone.utc) - cached_at < timedelta(hours=1):
                 return cache_data.get("news", [])[:max_results * 2]
-        except:
+        except Exception:
             pass
     
     # === 并行请求 ===
@@ -330,7 +330,7 @@ def search_news_for_market(market_title, max_results=5, use_cache=True):
                 result = future.result(timeout=15)
                 if result:
                     all_news.extend(result)
-            except:
+            except Exception:
                 pass
     
     # 去重（按标题）
@@ -370,7 +370,7 @@ def search_news_for_market(market_title, max_results=5, use_cache=True):
             "news": final_results
         }
         cache_file.write_text(json.dumps(cache_data, ensure_ascii=False))
-    except:
+    except Exception:
         pass
     
     return final_results
@@ -395,7 +395,7 @@ def search_serpapi(query, max_results=5):
     try:
         with open(usage_file, 'r') as f:
             usage = json.load(f)
-    except:
+    except Exception:
         usage = {"last_used": "", "daily_count": 0}
     
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
