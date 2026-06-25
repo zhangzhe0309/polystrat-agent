@@ -440,9 +440,9 @@ def main():
 
     decisions = []
     trades_made = 0  # 实际下单计数
-    
-    # 获取账户余额（模拟）
-    balance = 1000.0  # 模拟余额
+
+    # 获取账户余额（从配置读取）
+    balance = float(os.environ.get("POLYSTRAT_BALANCE", "1000.0"))
     
     # 加载交易历史并计算自适应权重
     trade_history = load_trade_history()
@@ -610,24 +610,40 @@ def main():
             ml_confidence = 0.5
             print(f"⚠️ ML 信号分析失败: {e}")
 
-        # 7. 综合判断（加权平均 - 使用自适应权重 + ML）
-        # 将情感分数转换为概率调整 (-1 到 1 -> -0.1 到 0.1)
-        sentiment_adjustment = sentiment_score * 0.1
+        # 7. 综合判断（各信号独立计算概率，然后加权平均）
         
-        # 链上信号调整
-        onchain_adjustment = 0
+        # 信号1: LLM 概率（已经是概率，直接使用）
+        llm_signal_prob = llm_prob
+        
+        # 信号2: 情感概率（将 sentiment_score 转换为概率）
+        # sentiment_score 范围 -1 到 1，映射到 0.3-0.7
+        sentiment_signal_prob = 0.5 + sentiment_score * 0.2
+        
+        # 信号3: 链上概率（将 recommendation 转换为概率）
+        onchain_signal_prob = 0.5
         if onchain_recommendation == "strong_buy":
-            onchain_adjustment = 0.05
+            onchain_signal_prob = 0.7
         elif onchain_recommendation == "buy":
-            onchain_adjustment = 0.02
+            onchain_signal_prob = 0.6
         elif onchain_recommendation == "sell":
-            onchain_adjustment = -0.02
+            onchain_signal_prob = 0.4
         
-        # ML 信号调整
-        ml_adjustment = (ml_prob - 0.5) * 0.1  # ML 概率偏离 0.5 的调整
+        # 信号4: ML 概率（已经是概率，直接使用）
+        ml_signal_prob = ml_prob
         
-        # 使用自适应权重计算最终概率
-        final_prob = (llm_prob * llm_weight) + ((llm_prob + sentiment_adjustment) * sentiment_weight) + ((llm_prob + onchain_adjustment + ml_adjustment) * onchain_weight)
+        # 加权平均（各信号独立，不互相包含）
+        final_prob = (
+            llm_signal_prob * llm_weight +
+            sentiment_signal_prob * sentiment_weight +
+            onchain_signal_prob * onchain_weight
+        )
+        
+        # ML 信号作为修正因子（可选）
+        # 如果 ML 信号置信度高，给予额外权重
+        if ml_confidence > 0.6:
+            ml_correction = (ml_signal_prob - 0.5) * 0.1
+            final_prob = final_prob + ml_correction
+        
         final_prob = max(0, min(1, final_prob))  # 限制在 0-1
 
         # 8. 计算优势

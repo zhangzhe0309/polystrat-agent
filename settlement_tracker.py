@@ -9,6 +9,7 @@ import requests
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from polystrat_logger import log, log_error
+from safe_file_ops import atomic_read_json, atomic_write_json
 
 # 交易记录文件
 TRADE_LOG = Path("/root/.hermes/profiles/life/home/.hermes/polymarket_bot/logs/polystrat_trades.json")
@@ -18,26 +19,12 @@ GAMMA_API = "https://gamma-api.polymarket.com"
 SETTLEMENT_TIMEOUT_DAYS = 30
 
 def load_trades():
-    """加载交易记录"""
-    try:
-        if TRADE_LOG.exists():
-            return json.loads(TRADE_LOG.read_text())
-        return []
-    except Exception as e:
-        log_error("settlement", e, "加载交易记录失败")
-        return []
+    """加载交易记录（使用安全文件操作）"""
+    return atomic_read_json(TRADE_LOG, default=[])
 
 def save_trades(trades):
-    """保存交易记录（带锁）"""
-    import fcntl
-    lock_path = str(TRADE_LOG) + ".lock"
-    
-    with open(lock_path, "w") as lock_file:
-        fcntl.flock(lock_file, fcntl.LOCK_EX)
-        try:
-            TRADE_LOG.write_text(json.dumps(trades, indent=2, ensure_ascii=False))
-        finally:
-            fcntl.flock(lock_file, fcntl.LOCK_UN)
+    """保存交易记录（使用原子写入）"""
+    atomic_write_json(TRADE_LOG, trades)
 
 def check_market_batch(condition_ids):
     """
