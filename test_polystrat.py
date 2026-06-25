@@ -121,13 +121,13 @@ class TestMLOptimizer(unittest.TestCase):
         self.assertEqual(labels[0], 1, "win标签应为1")
     
     def test_feature_count(self):
-        """特征数量应为6（只使用交易时可获取的信息）"""
+        """特征数量应为5（只使用交易时可获取的市场信息）"""
         trades = [
             {"llm_prob": 0.7, "sentiment_score": 0.3, "edge": 0.1, "market_price": 0.6,
              "direction": "Yes", "amount": 2, "final_prob": 0.99, "result": "win"},
         ]
         features, labels = self.extract_features(trades)
-        self.assertEqual(len(features[0]), 6, "特征数应为6")
+        self.assertEqual(len(features[0]), 5, "特征数应为5")
 
 
 class TestSmartKeywords(unittest.TestCase):

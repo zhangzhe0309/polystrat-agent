@@ -8,6 +8,7 @@
 - 加权平均集成
 """
 import json
+from safe_file_ops import atomic_read_json
 import os
 import numpy as np
 from datetime import datetime, timezone, timedelta
@@ -47,30 +48,24 @@ MODELS = {
 }
 
 def load_trade_data():
-    """加载交易数据"""
-    try:
-        if TRADE_LOG.exists():
-            with open(TRADE_LOG, 'r') as f:
-                return json.load(f)
-        return []
-    except Exception as e:
-        print(f"⚠️ 加载交易数据失败: {e}")
-        return []
+    """加载交易数据（使用安全文件操作）"""
+    return atomic_read_json(TRADE_LOG, default=[])
 
 def extract_features(trades):
     """
     提取特征
     
-    特征列表（只使用交易时可获取的信息）:
-    1. llm_prob: LLM 预测概率（交易时已知）
-    2. sentiment_score: 新闻情感分数（交易时已知）
-    3. abs(edge): 优势绝对值（交易时已知）
-    4. market_price: 市场价格（交易时已知）
-    5. direction: 方向 (Yes=1, No=0)（交易时已知）
-    6. amount: 下注金额（交易时已知）
+    特征列表（只使用交易时可获取的市场信息）:
+    1. llm_prob: LLM 预测概率（市场分析）
+    2. sentiment_score: 新闻情感分数（市场分析）
+    3. abs(edge): 优势绝对值（市场分析）
+    4. market_price: 市场价格（市场数据）
+    5. direction: 方向 (Yes=1, No=0)（市场分析）
     
-    注意：不能使用 final_prob 或 confidence，这些是决策输出！
-    使用决策输出作为特征会导致数据泄露。
+    注意：不能使用以下信息（会导致数据泄露）：
+    - final_prob: 决策输出
+    - confidence: 决策输出
+    - amount: 决策输出（由仓位计算函数决定）
     
     标签定义:
     - 1 = 已结算盈利 (result == "win")
@@ -87,14 +82,13 @@ def extract_features(trades):
         if result not in ("win", "lose"):
             continue
         
-        # 只使用交易时可获取的信息作为特征
+        # 只使用交易时可获取的市场信息作为特征（不包含决策输出）
         feature = [
             trade.get("llm_prob", 0.5),           # LLM 预测概率
             trade.get("sentiment_score", 0),       # 情感分数
             abs(trade.get("edge", 0)),             # 优势绝对值
             trade.get("market_price", 0.5),        # 市场价格
             1 if trade.get("direction") == "Yes" else 0,  # 方向
-            trade.get("amount", 2),                # 金额
         ]
         
         label = 1 if result == "win" else 0
@@ -272,7 +266,7 @@ def optimize_with_ml():
         total += 1
     
     # 特征重要性（使用 RandomForest）
-    feature_names = ["LLM概率", "情感分数", "优势", "市场价格", "方向", "金额"]
+    feature_names = ["LLM概率", "情感分数", "优势", "市场价格", "方向"]
     if "random_forest" in trained_models:
         importance = trained_models["random_forest"]["model"].feature_importances_
         importance_ranking = sorted(zip(feature_names, importance), key=lambda x: -x[1])
@@ -293,7 +287,7 @@ def optimize_with_ml():
         "recommendation": "集成模型可用"
     }
 
-def get_ml_signal(llm_prob, sentiment_score, edge, market_price, direction, amount):
+def get_ml_signal(llm_prob, sentiment_score, edge, market_price, direction):
     """
     获取 ML 信号
     
@@ -303,9 +297,10 @@ def get_ml_signal(llm_prob, sentiment_score, edge, market_price, direction, amou
         edge: 优势
         market_price: 市场价格
         direction: 方向 (Yes/No)
-        amount: 金额
     
-    注意：不能使用 final_prob，这是决策输出，会导致数据泄露！
+    注意：不能使用以下信息（会导致数据泄露）：
+    - final_prob: 决策输出
+    - amount: 决策输出（由仓位计算函数决定）
     """
     # 尝试加载缓存模型
     trained_models, scaler = load_model()
@@ -324,15 +319,14 @@ def get_ml_signal(llm_prob, sentiment_score, edge, market_price, direction, amou
             "models_used": 0
         }
     
-    # 预测（6个特征，与 extract_features 一致）
-    # 只使用交易时可获取的信息，不使用决策输出
+    # 预测（5个特征，与 extract_features 一致）
+    # 只使用交易时可获取的市场信息，不使用决策输出
     feature = [
         llm_prob, 
         sentiment_score, 
         abs(edge), 
         market_price, 
         1 if direction == "Yes" else 0, 
-        amount,
     ]
     ml_prob = predict_ensemble(trained_models, scaler, feature)
     

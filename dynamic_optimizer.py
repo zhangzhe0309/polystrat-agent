@@ -8,6 +8,7 @@ PolyStrat 动态优化模块
 5. 去重窗口优化（根据市场结算时间动态调整）
 """
 import json
+from safe_file_ops import atomic_read_json
 import os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -63,14 +64,8 @@ def save_optimization_config(config):
         print(f"⚠️ 保存优化配置失败: {e}")
 
 def load_trade_history():
-    """加载交易历史"""
-    try:
-        if TRADE_LOG.exists():
-            with open(TRADE_LOG) as f:
-                return json.load(f)
-    except Exception:
-        pass
-    return []
+    """加载交易历史（使用安全文件操作）"""
+    return atomic_read_json(TRADE_LOG, default=[])
 
 def get_recent_trades(days=7):
     """获取最近N天的交易"""

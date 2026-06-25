@@ -6,6 +6,7 @@
 - 自动优化策略参数
 """
 import json
+from safe_file_ops import atomic_read_json
 import os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -21,15 +22,8 @@ MAX_WEIGHT = 0.8  # 最大权重
 ROLLING_WINDOW_DAYS = 7  # 滚动窗口（天）
 
 def load_trade_history():
-    """加载交易历史"""
-    try:
-        if TRADE_LOG.exists():
-            with open(TRADE_LOG, 'r') as f:
-                return json.load(f)
-        return []
-    except Exception as e:
-        print(f"⚠️ 加载交易历史失败: {e}")
-        return []
+    """加载交易历史（使用安全文件操作）"""
+    return atomic_read_json(TRADE_LOG, default=[])
 
 def calculate_signal_accuracy(trades, signal_type="llm"):
     """

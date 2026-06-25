@@ -71,9 +71,21 @@ MAX_TRADES_PER_RUN = 3
 DEDUP_HOURS = 24  # 24小时内不重复交易同一市场
 MIN_LIQUIDITY = 5000  # 最小流动性 $5000
 
-# 权重配置（优化后）
-LLM_WEIGHT = 0.5  # LLM 分析权重
-NEWS_WEIGHT = 0.5  # 新闻情感权重
+# 权重配置（所有信号独立加权，总和=1.0）
+# 信号源: LLM, 情感, 链上, ML
+SIGNAL_WEIGHTS = {
+    "llm": 0.40,        # LLM 分析权重
+    "sentiment": 0.20,  # 新闻情感权重
+    "onchain": 0.20,    # 链上信号权重
+    "ml": 0.20,         # ML 信号权重
+}
+
+# 验证权重归一化
+assert abs(sum(SIGNAL_WEIGHTS.values()) - 1.0) < 1e-6, "权重总和必须为1.0"
+
+# 兼容旧代码
+LLM_WEIGHT = SIGNAL_WEIGHTS["llm"]
+NEWS_WEIGHT = SIGNAL_WEIGHTS["sentiment"]
 
 GAMMA_API = "https://gamma-api.polymarket.com"
 CLOB_API = "https://clob.polymarket.com"
@@ -599,8 +611,7 @@ def main():
                 sentiment_score,
                 0,  # edge 在后面计算
                 yes_price,
-                "Yes" if llm_prob > yes_price else "No",
-                BET_AMOUNT
+                "Yes" if llm_prob > yes_price else "No"
             )
             ml_prob = ml_signal.get("ml_prob", 0.5)
             ml_confidence = ml_signal.get("confidence", 0.5)
@@ -611,6 +622,7 @@ def main():
             print(f"⚠️ ML 信号分析失败: {e}")
 
         # 7. 综合判断（各信号独立计算概率，然后加权平均）
+        # 所有信号统一为概率格式 (0-1)
         
         # 信号1: LLM 概率（已经是概率，直接使用）
         llm_signal_prob = llm_prob
@@ -618,6 +630,7 @@ def main():
         # 信号2: 情感概率（将 sentiment_score 转换为概率）
         # sentiment_score 范围 -1 到 1，映射到 0.3-0.7
         sentiment_signal_prob = 0.5 + sentiment_score * 0.2
+        sentiment_signal_prob = max(0.3, min(0.7, sentiment_signal_prob))
         
         # 信号3: 链上概率（将 recommendation 转换为概率）
         onchain_signal_prob = 0.5
@@ -631,20 +644,17 @@ def main():
         # 信号4: ML 概率（已经是概率，直接使用）
         ml_signal_prob = ml_prob
         
-        # 加权平均（各信号独立，不互相包含）
+        # 使用统一权重配置进行加权平均
+        # 权重已归一化，总和=1.0
         final_prob = (
-            llm_signal_prob * llm_weight +
-            sentiment_signal_prob * sentiment_weight +
-            onchain_signal_prob * onchain_weight
+            llm_signal_prob * SIGNAL_WEIGHTS["llm"] +
+            sentiment_signal_prob * SIGNAL_WEIGHTS["sentiment"] +
+            onchain_signal_prob * SIGNAL_WEIGHTS["onchain"] +
+            ml_signal_prob * SIGNAL_WEIGHTS["ml"]
         )
         
-        # ML 信号作为修正因子（可选）
-        # 如果 ML 信号置信度高，给予额外权重
-        if ml_confidence > 0.6:
-            ml_correction = (ml_signal_prob - 0.5) * 0.1
-            final_prob = final_prob + ml_correction
-        
-        final_prob = max(0, min(1, final_prob))  # 限制在 0-1
+        # 边界检查
+        final_prob = max(0.01, min(0.99, final_prob))  # 防止极端值
 
         # 8. 计算优势
         edge = final_prob - yes_price

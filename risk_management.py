@@ -9,6 +9,7 @@
 import json
 import os
 from datetime import datetime, timezone
+from safe_file_ops import atomic_read_json
 from polystrat_logger import log
 
 # 配置
@@ -22,15 +23,8 @@ MAX_SAME_MARKET = 0.10  # 同一市场最大10%
 TRADE_LOG = "/root/.hermes/profiles/life/home/.hermes/polymarket_bot/logs/polystrat_trades.json"
 
 def load_trade_history():
-    """加载交易历史"""
-    try:
-        if os.path.exists(TRADE_LOG):
-            with open(TRADE_LOG, 'r') as f:
-                return json.load(f)
-        return []
-    except Exception as e:
-        print(f"⚠️ 加载交易历史失败: {e}")
-        return []
+    """加载交易历史（使用安全文件操作）"""
+    return atomic_read_json(TRADE_LOG, default=[])
 
 def calculate_position_size(balance, confidence, market_category=None):
     """
