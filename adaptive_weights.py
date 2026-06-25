@@ -38,7 +38,9 @@ def calculate_signal_accuracy(trades, signal_type="llm"):
     评判标准（基于结算结果）：
     - 已结算: 根据 direction vs settlement_result 判断
     - 未结算: 排除出计算（不算赢也不算输）
-    - 旧记录(无 result 字段): 用 edge 方向一致性作弱代理
+    - 旧记录(无 result 字段): 排除出计算
+    
+    注意：不能用 edge 方向一致性作弱代理，这是数据泄露！
     
     Args:
         trades: 交易列表
@@ -57,27 +59,14 @@ def calculate_signal_accuracy(trades, signal_type="llm"):
         result = trade.get("result", "")
         direction = trade.get("direction", "")
         
+        # 只使用已结算的交易
         if result == "win":
             actual = "win"
         elif result == "lose":
             actual = "lose"
-        elif result == "pending" or not result:
-            # 未结算：检查是否有足够信息做弱判断
-            # 如果有 market_price 和 final_prob，用方向一致性
-            edge = trade.get("edge", 0)
-            market_price = trade.get("market_price", 0.5)
-            final_prob = trade.get("final_prob", 0.5)
-            
-            # AI 判断 Yes 概率 > 市场价 → 应该买 Yes
-            # 如果 edge 与 direction 一致，说明决策逻辑正确（但不代表结果）
-            if direction == "Yes" and edge > 0:
-                # 逻辑一致：AI说买Yes，且确实有正向edge
-                actual = "win"  # 逻辑一致性标记
-            elif direction == "No" and edge < 0:
-                actual = "win"
-            else:
-                actual = "lose"
         else:
+            # 未结算或无结果：跳过，不计入统计
+            # 注意：不能用 edge 方向一致性，这是数据泄露！
             continue
         
         # 获取信号预测
@@ -198,13 +187,15 @@ def calculate_adaptive_weights(trades):
 
 def calculate_overall_win_rate(trades):
     """
-    计算整体胜率（基于结算结果或方向一致性）
+    计算整体胜率（仅基于已结算结果）
+    
+    注意：不能用 edge 方向一致性作弱代理，这是数据泄露！
     
     Args:
         trades: 交易列表
     
     Returns:
-        float: 胜率 (0-1)
+        float: 胜率 (0-1)，如果没有已结算交易返回 0.5
     """
     if not trades:
         return 0.5
@@ -214,19 +205,17 @@ def calculate_overall_win_rate(trades):
     
     for trade in trades:
         result = trade.get("result", "")
-        direction = trade.get("direction", "")
-        edge = trade.get("edge", 0)
         
+        # 只使用已结算的交易
         if result == "win":
             wins += 1
             total += 1
         elif result == "lose":
             total += 1
-        elif not result or result == "pending":
-            # 未结算：用方向一致性作弱代理
-            if (direction == "Yes" and edge > 0) or (direction == "No" and edge < 0):
-                wins += 1
-            total += 1
+        else:
+            # 未结算或无结果：跳过
+            # 注意：不能用 edge 方向一致性，这是数据泄露！
+            continue
     
     return wins / total if total > 0 else 0.5
 

@@ -61,15 +61,16 @@ def extract_features(trades):
     """
     提取特征
     
-    特征列表:
-    1. llm_prob: LLM 预测概率
-    2. sentiment_score: 新闻情感分数
-    3. abs(edge): 优势绝对值
-    4. market_price: 市场价格
-    5. direction: 方向 (Yes=1, No=0)
-    6. amount: 下注金额
-    7. final_prob: 综合概率
-    8. confidence: 仓位置信度
+    特征列表（只使用交易时可获取的信息）:
+    1. llm_prob: LLM 预测概率（交易时已知）
+    2. sentiment_score: 新闻情感分数（交易时已知）
+    3. abs(edge): 优势绝对值（交易时已知）
+    4. market_price: 市场价格（交易时已知）
+    5. direction: 方向 (Yes=1, No=0)（交易时已知）
+    6. amount: 下注金额（交易时已知）
+    
+    注意：不能使用 final_prob 或 confidence，这些是决策输出！
+    使用决策输出作为特征会导致数据泄露。
     
     标签定义:
     - 1 = 已结算盈利 (result == "win")
@@ -86,15 +87,14 @@ def extract_features(trades):
         if result not in ("win", "lose"):
             continue
         
+        # 只使用交易时可获取的信息作为特征
         feature = [
-            trade.get("llm_prob", 0.5),
-            trade.get("sentiment_score", 0),
-            abs(trade.get("edge", 0)),
-            trade.get("market_price", 0.5),
-            1 if trade.get("direction") == "Yes" else 0,
-            trade.get("amount", 2),
-            trade.get("final_prob", 0.5),
-            abs(trade.get("edge", 0)) * trade.get("amount", 2),  # 优势×金额
+            trade.get("llm_prob", 0.5),           # LLM 预测概率
+            trade.get("sentiment_score", 0),       # 情感分数
+            abs(trade.get("edge", 0)),             # 优势绝对值
+            trade.get("market_price", 0.5),        # 市场价格
+            1 if trade.get("direction") == "Yes" else 0,  # 方向
+            trade.get("amount", 2),                # 金额
         ]
         
         label = 1 if result == "win" else 0
@@ -272,7 +272,7 @@ def optimize_with_ml():
         total += 1
     
     # 特征重要性（使用 RandomForest）
-    feature_names = ["LLM概率", "情感分数", "优势", "市场价格", "方向", "金额", "综合概率", "优势×金额"]
+    feature_names = ["LLM概率", "情感分数", "优势", "市场价格", "方向", "金额"]
     if "random_forest" in trained_models:
         importance = trained_models["random_forest"]["model"].feature_importances_
         importance_ranking = sorted(zip(feature_names, importance), key=lambda x: -x[1])
@@ -293,7 +293,7 @@ def optimize_with_ml():
         "recommendation": "集成模型可用"
     }
 
-def get_ml_signal(llm_prob, sentiment_score, edge, market_price, direction, amount, final_prob=None):
+def get_ml_signal(llm_prob, sentiment_score, edge, market_price, direction, amount):
     """
     获取 ML 信号
     
@@ -304,7 +304,8 @@ def get_ml_signal(llm_prob, sentiment_score, edge, market_price, direction, amou
         market_price: 市场价格
         direction: 方向 (Yes/No)
         amount: 金额
-        final_prob: 综合概率（可选，默认等于 llm_prob）
+    
+    注意：不能使用 final_prob，这是决策输出，会导致数据泄露！
     """
     # 尝试加载缓存模型
     trained_models, scaler = load_model()
@@ -323,10 +324,8 @@ def get_ml_signal(llm_prob, sentiment_score, edge, market_price, direction, amou
             "models_used": 0
         }
     
-    # 预测（8个特征，与 extract_features 一致）
-    if final_prob is None:
-        final_prob = llm_prob
-    
+    # 预测（6个特征，与 extract_features 一致）
+    # 只使用交易时可获取的信息，不使用决策输出
     feature = [
         llm_prob, 
         sentiment_score, 
@@ -334,8 +333,6 @@ def get_ml_signal(llm_prob, sentiment_score, edge, market_price, direction, amou
         market_price, 
         1 if direction == "Yes" else 0, 
         amount,
-        final_prob,
-        abs(edge) * amount,  # 优势×金额
     ]
     ml_prob = predict_ensemble(trained_models, scaler, feature)
     

@@ -9,6 +9,7 @@
 import json
 import os
 from datetime import datetime, timezone
+from polystrat_logger import log
 
 # 配置
 STOP_LOSS_THRESHOLD = -0.10  # 最大亏损10%
@@ -35,6 +36,8 @@ def calculate_position_size(balance, confidence, market_category=None):
     """
     计算仓位大小
     
+    使用事务性读取，只加载一次交易历史，保证数据一致性
+    
     Args:
         balance: 账户余额
         confidence: 置信度 (0-1)
@@ -49,28 +52,36 @@ def calculate_position_size(balance, confidence, market_category=None):
     # 根据置信度调整
     confidence_adjusted = base_position * confidence
     
+    # 只加载一次交易历史，保证数据一致性
+    trades = load_trade_history()
+    
     # 检查同类别限制
     if market_category:
-        trades = load_trade_history()
         category_trades = [t for t in trades if t.get("category") == market_category]
-        category_exposure = sum(t.get("amount", 0) for t in category_trades)
+        # 只计算未结算的交易（pending 或无 result）
+        category_exposure = sum(
+            t.get("amount", 0) for t in category_trades 
+            if t.get("result") in ("pending", "", None)
+        )
         
         max_category = balance * MAX_SAME_CATEGORY
         if category_exposure >= max_category:
-            print(f"⚠️ {market_category} 类别已达上限 ({category_exposure:.2f}/{max_category:.2f})")
+            log.warning(f"{market_category} 类别已达上限 ({category_exposure:.2f}/{max_category:.2f})")
             return 0
         
         # 剩余类别额度
         remaining_category = max_category - category_exposure
         confidence_adjusted = min(confidence_adjusted, remaining_category)
     
-    # 检查总仓位限制
-    trades = load_trade_history()
-    total_exposure = sum(t.get("amount", 0) for t in trades if t.get("status") == "DRY_RUN")
+    # 检查总仓位限制（只计算未结算的交易）
+    total_exposure = sum(
+        t.get("amount", 0) for t in trades 
+        if t.get("result") in ("pending", "", None)
+    )
     max_total = balance * MAX_TOTAL_POSITION
     
     if total_exposure >= max_total:
-        print(f"⚠️ 总仓位已达上限 ({total_exposure:.2f}/{max_total:.2f})")
+        log.warning(f"总仓位已达上限 ({total_exposure:.2f}/{max_total:.2f})")
         return 0
     
     # 剩余总仓位额度

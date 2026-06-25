@@ -35,6 +35,7 @@ from dynamic_optimizer import (
     get_dynamic_price_thresholds, get_dynamic_dedup_hours,
     format_optimization_report)
 from polystrat_logger import log, log_error, log_api_call, log_performance
+from safe_file_ops import atomic_write_json, atomic_read_json, append_to_json_array
 
 # === 配置 ===
 # LLM Ensemble 链：Qwen 3.5 + Kimi K2.6 + Llama 3.3 70B（三模型投票）
@@ -329,24 +330,8 @@ def place_order(token_id, side, amount, price):
 
 
 def save_trade(trade_info):
-    """保存交易记录（带文件锁，防止并发写入丢失数据）"""
-    import fcntl
-    lock_path = str(TRADE_LOG) + ".lock"
-    
-    # 获取文件锁
-    with open(lock_path, "w") as lock_file:
-        fcntl.flock(lock_file, fcntl.LOCK_EX)  # 排他锁
-        try:
-            trades = []
-            if TRADE_LOG.exists():
-                try:
-                    trades = json.loads(TRADE_LOG.read_text())
-                except Exception:
-                    pass
-            trades.append(trade_info)
-            TRADE_LOG.write_text(json.dumps(trades, indent=2, ensure_ascii=False))
-        finally:
-            fcntl.flock(lock_file, fcntl.LOCK_UN)  # 释放锁
+    """保存交易记录（使用原子写入+正确的文件锁）"""
+    append_to_json_array(TRADE_LOG, trade_info)
 
 
 def format_output(decisions):
