@@ -29,6 +29,7 @@ from adaptive_weights import calculate_adaptive_weights, load_trade_history
 from ml_optimizer import get_ml_signal
 from multi_platform import get_multiplatform_signal
 from smart_keywords import get_search_queries
+from advanced_voting import create_voting_system
 from dynamic_optimizer import (
     calculate_llm_model_weights, get_llm_model_weight,
     get_news_source_quota, calculate_position_with_liquidity,
@@ -228,9 +229,9 @@ def search_news(query, max_results=3):
 
 
 def llm_analyze_probability(market_title, news_context, current_yes_price, category="Other"):
-    """使用多 LLM 分析市场概率，取平均值（Ensemble）"""
+    """使用多 LLM 分析市场概率，使用高级投票系统（加权+异常值过滤）"""
     if not LLM_PROVIDERS:
-        return None, []
+        return None, [], {}
 
     # 根据分类添加上下文
     category_context = {
@@ -259,7 +260,7 @@ def llm_analyze_probability(market_title, news_context, current_yes_price, categ
 只输出一个数字，不要解释。例如: 65"""
 
     # 遍历所有 provider，收集概率
-    probabilities = []
+    predictions_dict = {}
     model_results = []
     for provider in LLM_PROVIDERS:
         api_key = provider["api_key"]
@@ -290,7 +291,7 @@ def llm_analyze_probability(market_title, news_context, current_yes_price, categ
                 if match:
                     prob = int(match.group(1))
                     if 0 <= prob <= 100:
-                        probabilities.append(prob / 100.0)
+                        predictions_dict[provider["name"]] = prob
                         model_results.append(f"{provider['name']}:{prob}¢")
                 break  # 成功，不再重试
             except Exception:
@@ -299,11 +300,26 @@ def llm_analyze_probability(market_title, news_context, current_yes_price, categ
                     continue
                 break
 
-    # 返回平均值和各模型结果
-    if probabilities:
-        avg = sum(probabilities) / len(probabilities)
-        return avg, model_results
-    return None, []
+    # 使用高级投票系统
+    if predictions_dict:
+        voting_system = create_voting_system()
+        vote_result = voting_system.vote(predictions_dict)
+        
+        avg = vote_result["final_prediction"] / 100.0
+        confidence = vote_result["confidence"]
+        disagreement = vote_result["disagreement"]
+        
+        # 记录投票详情
+        if vote_result["need_review"]:
+            log.warning(f"LLM投票分歧大: {disagreement:.1f}%, 置信度: {confidence:.2f}")
+        
+        return avg, model_results, {
+            "confidence": confidence,
+            "disagreement": disagreement,
+            "need_review": vote_result["need_review"]
+        }
+    
+    return None, [], {}
 
 
 def place_order(token_id, side, amount, price):
@@ -599,10 +615,14 @@ def main():
             arbitrage_opportunities = []
             print(f"⚠️ 多平台信号分析失败: {e}")
 
-        # 6. LLM 分析概率（传入分类，返回平均值和各模型结果）
-        llm_prob, model_results = llm_analyze_probability(title, news_text, yes_price, category)
+        # 6. LLM 分析概率（使用高级投票系统，返回加权平均和投票详情）
+        llm_prob, model_results, vote_details = llm_analyze_probability(title, news_text, yes_price, category)
         if llm_prob is None:
             continue
+        
+        # 记录投票详情
+        if vote_details.get("need_review"):
+            log.warning(f"市场 '{title[:30]}' LLM投票分歧大，置信度低")
 
         # 7. ML 信号分析（在 LLM 分析之后，因为需要 llm_prob）
         try:
@@ -689,6 +709,7 @@ def main():
             "direction": direction,
             "order_result": None,
             "model_results": model_results,
+            "vote_details": vote_details,  # 投票详情（置信度、分歧度）
             "risk_check": {"should_trade": should_trade_flag, "reason": risk_reason}
         }
 
