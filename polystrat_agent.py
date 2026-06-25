@@ -28,6 +28,7 @@ from onchain_monitor import get_onchain_signal
 from adaptive_weights import calculate_adaptive_weights, load_trade_history
 from ml_optimizer import get_ml_signal
 from multi_platform import get_multiplatform_signal
+from smart_keywords import get_search_queries
 
 # === 配置 ===
 # LLM Ensemble 链：Qwen 3.5 + Kimi K2.6 + Llama 3.3 70B（三模型投票）
@@ -486,14 +487,29 @@ def main():
             print(f"⏭️ 跳过已交易市场: {title[:40]}...")
             continue
 
-        # 2. 搜索相关新闻（使用 news_search 模块）
-        search_query = title.replace("?", "").replace("Will ", "")[:80]
-        # 对体育市场添加年份
-        if category == "Sports" and "2026" not in search_query:
-            search_query += " 2026"
+        # 2. 搜索相关新闻（使用智能关键词 + news_search 模块）
+        search_queries = get_search_queries(title, category, max_queries=2)
+        search_query = search_queries[0] if search_queries else title[:50]
+        
+        # 打印使用的关键词（调试用）
+        print(f"🔍 搜索关键词: {search_query}")
         
         try:
-            news_list = search_news_for_market(search_query, max_results=3)
+            # 使用多个关键词搜索，合并结果
+            all_news = []
+            for query in search_queries[:2]:
+                news = search_news_for_market(query, max_results=2)
+                all_news.extend(news)
+            
+            # 去重
+            seen_titles = set()
+            news_list = []
+            for n in all_news:
+                t = n.get("title", "").lower()
+                if t and t not in seen_titles:
+                    seen_titles.add(t)
+                    news_list.append(n)
+            
             news_text = "\n".join([n.get("title", "") for n in news_list[:3]])
         except Exception as e:
             news_list = []
