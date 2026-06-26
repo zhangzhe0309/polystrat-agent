@@ -1,4 +1,4 @@
-# PolyStrat - AI 自主交易 Agent v3.2
+# PolyStrat - AI 自主交易 Agent v3.3
 
 🤖 **PolyStrat** 是一个基于 AI 的 Polymarket 预测市场自主交易机器人，采用多信号融合策略进行自动化交易决策。
 
@@ -6,7 +6,7 @@
 
 ## ✨ 核心特性
 
-- **多源新闻聚合** — 6个新闻源并行搜索（GNews、Currents、NewsData、NYTimes、SerpAPI、RSS）
+- **多源新闻聚合** — 5个新闻源并行搜索（GNews、Currents、NewsData、NYTimes、RSS；SerpAPI 每天1次手动触发）
 - **LLM 集成分析** — 4模型投票（DeepSeek V4 Flash、Nemotron 3 Super、MiniMax M2.7、GLM-5.1）
 - **智能情感分析** — 关键词 + LLM 双重分析
 - **机器学习优化** — 4模型集成（LR、RF、GBDT、KNN）
@@ -186,6 +186,17 @@ PolyStrat 快速评审
 ---
 
 ## 📝 更新日志
+
+### v3.3 (2026-06-26)
+
+**第4轮修复 — 数据流完整性（详见 [OPTIMIZATION.md](OPTIMIZATION.md)）:**
+
+**数据流:**
+- [P1] 新闻正文传递给 LLM（title + description，前4条）
+- [P1] SerpAPI 移出自动流（每天1次配额，改为手动触发）
+- [P1] 止损检查接入主循环（`check_stop_loss` 计算累计回撤，超-10%暂停新交易）
+- [P2] LLM temperature 使用 per-provider 配置（0.3/0.4/0.5，提升投票多样性）
+- [P2] 清理孤儿代码（`search_news_simple` 残留定义）
 
 ### v3.2 (2026-06-26)
 

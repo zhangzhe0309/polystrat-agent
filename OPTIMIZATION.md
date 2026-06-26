@@ -1,5 +1,15 @@
 # PolyStrat 策略优化记录
 
+> **目标**：对 PolyStrat 项目（Polymarket AI 交易机器人）进行全面策略逻辑优化，修复 P0/P1 级别逻辑缺陷，并从高级 Polymarket 交易者视角进行全局评审和修复。
+>
+> **约束**：
+> - 项目只运行在 VPS（Linux），不关心 Windows/macOS 跨平台兼容性（fcntl 问题可忽略）
+> - 重点放在策略逻辑、核心算法、数据流程完整性
+> - 修改要可执行、可验证，所有文件需通过 Python 语法检查
+> - 代码推送到 Gitee 仓库
+
+---
+
 ## 第一轮优化（6 文件，10 项修改）
 
 ### 1. adaptive_weights.py — 自适应权重扩展
@@ -113,6 +123,36 @@
 
 ---
 
+## 第四轮优化（3 文件，5 项修复）
+
+### 17. polystrat_agent.py — 新闻正文传递给 LLM
+- **旧**：`news_text` 仅拼接 `title`，浪费 description 中 90% 信息价值
+- **新**：`标题: {title}\n描述: {description}` 格式，取前 4 条新闻
+- LLM prompt 接收完整新闻内容，提升判断依据
+
+### 18. polystrat_agent.py — LLM temperature 使用 per-provider 配置
+- **旧**：所有 provider 硬编码 `temperature: 0.1`，4 模型趋同
+- **新**：使用 `provider.get("temperature", 0.3)`，DeepSeek 0.3 / Nemotron 0.5 / MiniMax 0.5 / GLM 0.4
+- 投票多样性显著提升
+
+### 19. news_search.py — SerpAPI 移出自动流
+- **旧**：SerpAPI 每天仅 1 次配额，但在 `search_news_for_market` 的并行任务列表中每轮都调用
+- **新**：从自动流中移除（仍保留 `search_serpapi` 函数供手动触发）
+- 避免配额耗尽后仍浪费时间请求
+
+### 20. risk_management.py + polystrat_agent.py — 止损接入主循环
+- **旧**：`check_stop_loss()` 接收单 position dict 含 `pnl` 字段，但调用方从未传入 → 函数永远返回 False，止损形同虚设
+- **新**：`check_stop_loss(balance, trade_history)` 计算累计回撤：
+  - 遍历所有已结算交易（`result: "win"/"loss"`）
+  - `drawdown = (总亏损 - 总收益) / balance`
+  - 超过 `STOP_LOSS_THRESHOLD = -10%` 触发
+- 主循环中检查止损结果，`STOP_LOSS_TRIGGERED = True` 时跳过所有新交易
+
+### 21. news_search.py — 清理孤儿代码
+- 删除 `search_news_simple` 的残留重复定义（函数体挂空，无法被调用）
+
+---
+
 ## 优化总结
 
 | 轮次 | 涉及文件 | 修改项 | 核心改善 |
@@ -120,4 +160,5 @@
 | 第1轮 | 6 | 10 | 自适应权重/数据泄露/时间序列CV/Kelly仓位 |
 | 第2轮 | 3 | 4 | 信号映射闭环/新闻源评分真实现 |
 | 第3轮 | 4 | 6 | 模型阵容升级/voting硬编码/onchain真数据 |
-| **合计** | **8** | **20** | **动态值生效率 95%** |
+| 第4轮 | 3 | 5 | 新闻正文/temperature多样化/SerpAPI止流失控/止损真接入 |
+| **合计** | **9** | **25** | **核心逻辑缺陷全部修复** |
