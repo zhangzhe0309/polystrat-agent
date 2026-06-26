@@ -185,6 +185,35 @@ PolyStrat 快速评审
 
 ## 📝 更新日志
 
+### v3.4 (2026-06-26)
+
+**甜蜜点市场策略 — 聚焦高胜率区间：**
+
+**核心优化:**
+- [P0] 新增 `SWEET_SPOT_CONFIG` 配置（价格区间、流动性、分歧度阈值）
+- [P0] 新增 `SWEET_SPOT_MODE` 开关（可切换回原始模式）
+- [P0] 市场筛选逻辑优化：聚焦 10-30¢ 甜蜜点区间
+- [P1] 投票质量检查：分歧度 15-40%，置信度 ≥60%
+- [P1] 优选事件类型：Politics、Sports、Crypto、Economics
+
+**预期效果:**
+- 胜率提升 +5-8%（聚焦高概率区间）
+- 减少噪声交易（投票质量检查过滤低质量信号）
+- 提高资金效率（优选高流动性市场）
+
+**配置说明:**
+```python
+SWEET_SPOT_CONFIG = {
+    "min_price": 0.10,      # 最低 10¢
+    "max_price": 0.30,      # 最高 30¢（甜蜜点上限）
+    "min_liquidity": 20000, # 最低流动性 $20k
+    "min_disagreement": 15, # 最低投票分歧 15%
+    "max_disagreement": 40, # 最高投票分歧 40%
+    "min_confidence": 0.6,  # 最低投票置信度 60%
+    "preferred_categories": ["Politics", "Sports", "Crypto", "Economics"],
+}
+```
+
 ### v3.3 (2026-06-26)
 
 **第4轮修复 — 数据流完整性（详见 [OPTIMIZATION.md](OPTIMIZATION.md)）:**
