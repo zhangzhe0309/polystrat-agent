@@ -79,11 +79,14 @@ def calculate_signal_accuracy(trades, signal_type="llm"):
             predicted = "win" if trade.get("sentiment_score", 0) > 0 else "lose"
         elif signal_type == "onchain":
             onchain = trade.get("onchain_signal", {})
-            predicted = (
-                "win"
-                if onchain.get("recommendation") in ["buy", "strong_buy"]
-                else "lose"
-            )
+            rec = onchain.get("recommendation", "hold")
+            if rec in ["buy", "strong_buy"]:
+                predicted = "win"
+            elif rec == "sell":
+                predicted = "lose"
+            else:
+                # hold = 中性信号，不计入准确率
+                continue
         elif signal_type == "ml":
             predicted = (
                 "win"

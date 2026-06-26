@@ -7,7 +7,7 @@
 ## ✨ 核心特性
 
 - **多源新闻聚合** — 6个新闻源并行搜索（GNews、Currents、NewsData、NYTimes、SerpAPI、RSS）
-- **LLM 集成分析** — 3个模型投票（Qwen 3.5、Kimi K2.6、Llama 3.3 70B）
+- **LLM 集成分析** — 4模型投票（DeepSeek V4 Flash、Nemotron 3 Super、MiniMax M2.7、GLM-5.1）
 - **智能情感分析** — 关键词 + LLM 双重分析
 - **机器学习优化** — 4模型集成（LR、RF、GBDT、KNN）
 - **自适应权重** — 4信号（LLM/情感/链上/ML）根据历史胜率动态调整权重

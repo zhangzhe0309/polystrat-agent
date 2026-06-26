@@ -5,7 +5,7 @@
 1. 扫描 Polymarket 活跃市场
 2. 搜索相关新闻（GNews + Currents + RSS）
 3. 情感分析（LLM + 关键词）
-4. LLM 分析概率（3模型投票）
+4. LLM 分析概率（4模型投票）
 5. 风险管理（仓位/止损/分散）
 6. 自动下单（DRY_RUN 模式）
 7. 输出结果（Hermes Cron 推送）
@@ -54,24 +54,24 @@ from trade_limits import (
 # LLM Ensemble 链：多模型投票 + 多 API Key 容错
 LLM_PROVIDERS = [
     {
-        "name": "Qwen 3.5",
+        "name": "DeepSeek V4 Flash",
         "api_key": os.environ.get("NVIDIA_API_KEY_2", ""),
         "base_url": "https://integrate.api.nvidia.com/v1",
-        "model": "qwen/qwen3.5-397b-a17b",
-        "priority": 1,  # 优先级（1最高）
+        "model": "deepseek-ai/deepseek-v4-flash",
+        "priority": 1,
     },
     {
-        "name": "Kimi K2.6",
-        "api_key": os.environ.get("NVIDIA_API_KEY", ""),  # 使用不同的 API Key
+        "name": "Nemotron 3 Super",
+        "api_key": os.environ.get("NVIDIA_API_KEY", ""),
         "base_url": "https://integrate.api.nvidia.com/v1",
-        "model": "moonshotai/kimi-k2.6",
+        "model": "nvidia/nemotron-3-super-120b-a12b",
         "priority": 2,
     },
     {
-        "name": "Llama 3.3 70B",
+        "name": "MiniMax M2.7",
         "api_key": os.environ.get("NVIDIA_API_KEY_2", ""),
         "base_url": "https://integrate.api.nvidia.com/v1",
-        "model": "meta/llama-3.3-70b-instruct",
+        "model": "minimaxai/minimax-m2.7",
         "priority": 3,
     },
     {
@@ -79,7 +79,7 @@ LLM_PROVIDERS = [
         "api_key": os.environ.get("GLM_API_KEY", ""),
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
         "model": "glm-5.1",
-        "priority": 4,  # 备用模型
+        "priority": 4,
     },
 ]
 
