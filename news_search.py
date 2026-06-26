@@ -342,13 +342,20 @@ def search_news_for_market(market_title, max_results=5, use_cache=True):
             seen_titles.add(title)
             unique_news.append(news)
     
-    # 按来源分组，每个来源取前2条
+    # 按来源分组，使用动态配额（基于新闻源历史质量评分）
+    try:
+        from dynamic_optimizer import get_news_source_quota
+    except ImportError:
+        get_news_source_quota = None
+
     source_results = {}
     for news in unique_news:
         src = news.get("source_type", "unknown")
         if src not in source_results:
             source_results[src] = []
-        if len(source_results[src]) < 2:
+        # 动态配额：高质量来源取更多条，低质量来源取更少
+        quota = get_news_source_quota(src, base_quota=2) if get_news_source_quota else 2
+        if len(source_results[src]) < quota:
             source_results[src].append(news)
     
     # 合并结果

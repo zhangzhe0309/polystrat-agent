@@ -33,9 +33,6 @@ from smart_keywords import get_search_queries
 from advanced_voting import create_voting_system
 from dynamic_optimizer import (
     calculate_llm_model_weights,
-    get_llm_model_weight,
-    get_news_source_quota,
-    calculate_position_with_liquidity,
     get_dynamic_price_thresholds,
     get_dynamic_dedup_hours,
     format_optimization_report,
@@ -441,9 +438,16 @@ def llm_analyze_probability(
                     continue
                 break
 
-    # 使用高级投票系统
+    # 使用高级投票系统（传入动态模型权重）
     if predictions_dict:
-        voting_system = create_voting_system()
+        # 获取 LLM 模型动态权重（基于历史准确率）
+        try:
+            from dynamic_optimizer import calculate_llm_model_weights
+            model_weights = calculate_llm_model_weights()
+        except Exception:
+            model_weights = None
+
+        voting_system = create_voting_system(model_weights=model_weights)
         vote_result = voting_system.vote(predictions_dict)
 
         avg = vote_result["final_prediction"] / 100.0
