@@ -117,6 +117,20 @@ MAX_TRADES_PER_RUN = 3
 DEDUP_HOURS = 24  # 24小时内不重复交易同一市场
 MIN_LIQUIDITY = 5000  # 最小流动性 $5000
 
+# 甜蜜点市场配置（聚焦高胜率区间）
+SWEET_SPOT_CONFIG = {
+    "min_price": 0.10,      # 最低 10¢（避免极端事件）
+    "max_price": 0.30,      # 最高 30¢（甜蜜点上限）
+    "min_liquidity": 20000, # 最低流动性 $20k（确保可执行性）
+    "min_disagreement": 15, # 最低投票分歧 15%（市场有争议）
+    "max_disagreement": 40, # 最高投票分歧 40%（避免噪声）
+    "min_confidence": 0.6,  # 最低投票置信度 60%
+    "preferred_categories": ["Politics", "Sports", "Crypto", "Economics"],
+}
+
+# 启用甜蜜点模式（True=聚焦甜蜜点，False=使用原始阈值）
+SWEET_SPOT_MODE = True
+
 # 权重配置（优化后：降低LLM共线性风险，提高ML/链上权重）
 # 信号源: LLM, 情感, 链上, ML
 SIGNAL_WEIGHTS = {
@@ -802,6 +816,16 @@ def main():
     print(f"   样本大小: {adaptive_weights.get('sample_size', 0)}")
     print()
 
+    # 输出甜蜜点配置
+    if SWEET_SPOT_MODE:
+        print(f"🎯 甜蜜点模式: 已启用")
+        print(f"   价格区间: {SWEET_SPOT_CONFIG['min_price']:.0%} - {SWEET_SPOT_CONFIG['max_price']:.0%}")
+        print(f"   最低流动性: ${SWEET_SPOT_CONFIG['min_liquidity']:,}")
+        print(f"   分歧区间: {SWEET_SPOT_CONFIG['min_disagreement']}% - {SWEET_SPOT_CONFIG['max_disagreement']}%")
+        print(f"   最低置信度: {SWEET_SPOT_CONFIG['min_confidence']:.0%}")
+        print(f"   优选类型: {', '.join(SWEET_SPOT_CONFIG['preferred_categories'])}")
+        print()
+
     # 输出 LLM 模型动态权重
     print(f"🤖 LLM 模型动态权重:")
     for model, weight in llm_model_weights.items():
@@ -821,16 +845,27 @@ def main():
         liquidity = market.get("liquidity", 0)
         condition_id = market.get("condition_id", "")  # 唯一标识，用于去重
 
-        # 跳过极端价格（>97¢ 或 <3¢ 的市场没太大空间）
-        if (
-            yes_price > dynamic_thresholds["max_price"]
-            or yes_price < dynamic_thresholds["min_price"]
-        ):
-            continue
-
-        # 跳过低流动性市场
-        if liquidity < MIN_LIQUIDITY:
-            continue
+        # 甜蜜点模式：聚焦高胜率区间
+        if SWEET_SPOT_MODE:
+            # 跳过甜蜜点区间外的市场
+            if yes_price < SWEET_SPOT_CONFIG["min_price"] or yes_price > SWEET_SPOT_CONFIG["max_price"]:
+                continue
+            # 跳过低流动性市场（甜蜜点需要更高流动性）
+            if liquidity < SWEET_SPOT_CONFIG["min_liquidity"]:
+                continue
+            # 优先选择擅长的事件类型
+            if category not in SWEET_SPOT_CONFIG["preferred_categories"]:
+                continue
+        else:
+            # 原始模式：使用动态阈值
+            if (
+                yes_price > dynamic_thresholds["max_price"]
+                or yes_price < dynamic_thresholds["min_price"]
+            ):
+                continue
+            # 跳过低流动性市场
+            if liquidity < MIN_LIQUIDITY:
+                continue
 
         # === 修复：跳过DEDUP_HOURS小时内已交易的市场（用 condition_id 去重） ===
         dedup_key = condition_id if condition_id else title.lower()
@@ -933,6 +968,26 @@ def main():
         # 记录投票详情
         if vote_details.get("need_review"):
             log.warning(f"市场 '{title[:30]}' LLM投票分歧大，置信度低")
+
+        # 甜蜜点模式：检查投票质量
+        if SWEET_SPOT_MODE:
+            disagreement = vote_details.get("disagreement", 0)
+            confidence = vote_details.get("confidence", 0)
+
+            # 分歧太小 = 市场已定价，无优势
+            if disagreement < SWEET_SPOT_CONFIG["min_disagreement"]:
+                print(f"⏭️ 跳过 {title[:40]}... (分歧 {disagreement:.1f}% < {SWEET_SPOT_CONFIG['min_disagreement']}%)")
+                continue
+
+            # 分歧太大 = 噪声，不可靠
+            if disagreement > SWEET_SPOT_CONFIG["max_disagreement"]:
+                print(f"⏭️ 跳过 {title[:40]}... (分歧 {disagreement:.1f}% > {SWEET_SPOT_CONFIG['max_disagreement']}%)")
+                continue
+
+            # 置信度太低 = 模型不确定
+            if confidence < SWEET_SPOT_CONFIG["min_confidence"]:
+                print(f"⏭️ 跳过 {title[:40]}... (置信度 {confidence:.2f} < {SWEET_SPOT_CONFIG['min_confidence']})")
+                continue
 
         # 7. ML 信号分析（在 LLM 分析之后，因为需要 llm_prob）
         # 先计算 edge 供 ML 使用（ML 需要 edge 作为特征）
