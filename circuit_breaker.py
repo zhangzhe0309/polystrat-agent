@@ -127,6 +127,10 @@ class CircuitBreaker:
             self.state["last_loss_time"] = datetime.now(timezone.utc).isoformat()
         else:
             self.state["consecutive_losses"] = 0
+            # 盈利交易：如果当前是半开状态，恢复为 closed
+            if self.state["status"] == "half_open":
+                self.state["status"] = "closed"
+                log.info("断路器已从 half_open 恢复为 closed（盈利交易）")
 
         # 检查是否需要断开
         should_trip = False

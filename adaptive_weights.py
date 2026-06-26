@@ -30,7 +30,7 @@ def load_trade_history():
     return atomic_read_json(TRADE_LOG, default=[])
 
 
-def calculate_signal_accuracy(trades, signal_type="llm"):
+def calculate_signal_accuracy(trades, signal_type="llm", min_samples=3):
     """
     计算信号准确率
 
@@ -44,12 +44,13 @@ def calculate_signal_accuracy(trades, signal_type="llm"):
     Args:
         trades: 交易列表
         signal_type: 信号类型 (llm, sentiment, onchain)
+        min_samples: 最少样本要求（低于此返回 None）
 
     Returns:
-        float: 准确率 (0-1)
+        tuple: (准确率或 None, 样本数)
     """
     if not trades:
-        return 0.5  # 默认 50%
+        return (None, 0)
 
     correct = 0
     total = 0
@@ -64,35 +65,44 @@ def calculate_signal_accuracy(trades, signal_type="llm"):
         elif result == "lose":
             actual = "lose"
         else:
-            # 未结算或无结果：跳过，不计入统计
-            # 注意：不能用 edge 方向一致性，这是数据泄露！
             continue
 
-        # 获取信号预测
+        # 获取信号预测（direction感知）
         if signal_type == "llm":
-            predicted = (
-                "win"
-                if trade.get("llm_prob", 0.5) > trade.get("market_price", 0.5)
-                else "lose"
-            )
+            llm_prob = trade.get("llm_prob", 0.5)
+            mp = trade.get("market_price", 0.5)
+            if direction == "Yes":
+                predicted = "win" if llm_prob > mp else "lose"
+            elif direction == "No":
+                predicted = "win" if llm_prob < mp else "lose"
+            else:
+                continue
         elif signal_type == "sentiment":
-            predicted = "win" if trade.get("sentiment_score", 0) > 0 else "lose"
+            sentiment = trade.get("sentiment_score", 0)
+            if direction == "Yes":
+                predicted = "win" if sentiment > 0 else "lose"
+            elif direction == "No":
+                predicted = "win" if sentiment < 0 else "lose"
+            else:
+                continue
         elif signal_type == "onchain":
             onchain = trade.get("onchain_signal", {})
             rec = onchain.get("recommendation", "hold")
             if rec in ["buy", "strong_buy"]:
-                predicted = "win"
+                predicted = "win" if direction == "Yes" else "lose"
             elif rec == "sell":
-                predicted = "lose"
+                predicted = "win" if direction == "No" else "lose"
             else:
-                # hold = 中性信号，不计入准确率
                 continue
         elif signal_type == "ml":
-            predicted = (
-                "win"
-                if trade.get("ml_prob", 0.5) > trade.get("market_price", 0.5)
-                else "lose"
-            )
+            ml_prob = trade.get("ml_prob", 0.5)
+            mp = trade.get("market_price", 0.5)
+            if direction == "Yes":
+                predicted = "win" if ml_prob > mp else "lose"
+            elif direction == "No":
+                predicted = "win" if ml_prob < mp else "lose"
+            else:
+                continue
         else:
             continue
 
@@ -100,7 +110,9 @@ def calculate_signal_accuracy(trades, signal_type="llm"):
             correct += 1
         total += 1
 
-    return correct / total if total > 0 else 0.5
+    if total < min_samples:
+        return (None, total)
+    return (correct / total, total)
 
 
 def get_recent_trades(trades, days=ROLLING_WINDOW_DAYS):
@@ -155,51 +167,82 @@ def calculate_adaptive_weights(trades):
             "sample_size": len(recent_trades),
         }
 
-    # 计算各信号准确率
-    llm_accuracy = calculate_signal_accuracy(recent_trades, "llm")
-    sentiment_accuracy = calculate_signal_accuracy(recent_trades, "sentiment")
-    onchain_accuracy = calculate_signal_accuracy(recent_trades, "onchain")
-    ml_accuracy = calculate_signal_accuracy(recent_trades, "ml")
+    # 计算各信号准确率（返回 (accuracy_or_None, samples)）
+    llm_acc, llm_n = calculate_signal_accuracy(recent_trades, "llm")
+    sent_acc, sent_n = calculate_signal_accuracy(recent_trades, "sentiment")
+    onch_acc, onch_n = calculate_signal_accuracy(recent_trades, "onchain")
+    ml_acc, ml_n = calculate_signal_accuracy(recent_trades, "ml")
 
-    # 根据准确率计算权重
-    total_accuracy = llm_accuracy + sentiment_accuracy + onchain_accuracy + ml_accuracy
+    # 只使用有足够数据的信号计算权重，无数据信号给最小基准权重
+    signal_accs = {
+        "llm": llm_acc,
+        "sentiment": sent_acc,
+        "onchain": onch_acc,
+        "ml": ml_acc,
+    }
+    valid_weights = {}
+    for name, acc in signal_accs.items():
+        if acc is not None:
+            valid_weights[name] = acc
+        else:
+            valid_weights[name] = None
 
-    if total_accuracy > 0:
-        llm_weight = llm_accuracy / total_accuracy
-        sentiment_weight = sentiment_accuracy / total_accuracy
-        onchain_weight = onchain_accuracy / total_accuracy
-        ml_weight = ml_accuracy / total_accuracy
+    # 有数据的信号按准确率分配，无数据的给基准 0.1
+    BASE_WEIGHT = 0.1
+    raw_weights = {}
+    total_valid_accuracy = 0
+    for name, acc in valid_weights.items():
+        if acc is not None:
+            raw_weights[name] = acc
+            total_valid_accuracy += acc
+        else:
+            raw_weights[name] = None  # 稍后分配基准
+
+    if total_valid_accuracy > 0:
+        for name in raw_weights:
+            if raw_weights[name] is not None:
+                raw_weights[name] /= total_valid_accuracy
+            else:
+                raw_weights[name] = BASE_WEIGHT
     else:
-        llm_weight = 0.25
-        sentiment_weight = 0.15
-        onchain_weight = 0.30
-        ml_weight = 0.30
+        # 全部无数据 → 均匀分配
+        for name in raw_weights:
+            raw_weights[name] = 0.25
 
-    # 限制权重范围
+    llm_weight = raw_weights["llm"]
+    sentiment_weight = raw_weights["sentiment"]
+    onchain_weight = raw_weights["onchain"]
+    ml_weight = raw_weights["ml"]
+
+    # 归一化
+    total_raw = llm_weight + sentiment_weight + onchain_weight + ml_weight
+    llm_weight /= total_raw
+    sentiment_weight /= total_raw
+    onchain_weight /= total_raw
+    ml_weight /= total_raw
+
+    # 限幅后再次归一化
     llm_weight = max(MIN_WEIGHT, min(MAX_WEIGHT, llm_weight))
     sentiment_weight = max(MIN_WEIGHT, min(MAX_WEIGHT, sentiment_weight))
     onchain_weight = max(MIN_WEIGHT, min(MAX_WEIGHT, onchain_weight))
     ml_weight = max(MIN_WEIGHT, min(MAX_WEIGHT, ml_weight))
-
-    # 归一化
-    total_weight = llm_weight + sentiment_weight + onchain_weight + ml_weight
-    llm_weight /= total_weight
-    sentiment_weight /= total_weight
-    onchain_weight /= total_weight
-    ml_weight /= total_weight
+    total_clamped = llm_weight + sentiment_weight + onchain_weight + ml_weight
+    llm_weight /= total_clamped
+    sentiment_weight /= total_clamped
+    onchain_weight /= total_clamped
+    ml_weight /= total_clamped
 
     # 根据整体胜率调整优势阈值
     overall_win_rate = calculate_overall_win_rate(recent_trades)
     if overall_win_rate > 0.6:
-        edge_threshold = 0.03  # 胜率高，可以降低阈值
+        edge_threshold = 0.03
     elif overall_win_rate < 0.4:
-        edge_threshold = 0.06  # 胜率低，提高阈值
+        edge_threshold = 0.06
     else:
-        edge_threshold = 0.04  # 正常阈值
+        edge_threshold = 0.04
 
-    # 自适应情感映射斜率（基于情感信号历史准确率）
-    # 准确率高 → 扩大映射范围（让情感更有影响力）
-    # 准确率低 → 缩小映射范围（抑制噪声）
+    # 自适应情感映射斜率（无数据时用默认 0.35）
+    sentiment_accuracy = sent_acc if sent_acc is not None else 0.5
     if sentiment_accuracy > 0.6:
         sentiment_mapping_slope = 0.45
     elif sentiment_accuracy < 0.4:
@@ -207,9 +250,8 @@ def calculate_adaptive_weights(trades):
     else:
         sentiment_mapping_slope = 0.35
 
-    # 自适应链上信号乘数（基于链上信号历史准确率）
-    # 准确率高 → 加大链上信号置信度影响力
-    # 准确率低 → 降低链上信号置信度影响力
+    # 自适应链上信号乘数
+    onchain_accuracy = onch_acc if onch_acc is not None else 0.5
     if onchain_accuracy > 0.6:
         onchain_multiplier = 1.3
     elif onchain_accuracy < 0.4:
@@ -225,10 +267,10 @@ def calculate_adaptive_weights(trades):
         "edge_threshold": edge_threshold,
         "confidence": overall_win_rate,
         "sample_size": len(recent_trades),
-        "llm_accuracy": round(llm_accuracy, 3),
-        "sentiment_accuracy": round(sentiment_accuracy, 3),
-        "onchain_accuracy": round(onchain_accuracy, 3),
-        "ml_accuracy": round(ml_accuracy, 3),
+        "llm_accuracy": round(llm_acc, 3) if llm_acc is not None else None,
+        "sentiment_accuracy": round(sent_acc, 3) if sent_acc is not None else None,
+        "onchain_accuracy": round(onch_acc, 3) if onch_acc is not None else None,
+        "ml_accuracy": round(ml_acc, 3) if ml_acc is not None else None,
         "sentiment_mapping_slope": sentiment_mapping_slope,
         "onchain_multiplier": onchain_multiplier,
     }

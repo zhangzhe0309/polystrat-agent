@@ -14,7 +14,7 @@ from safe_file_ops import atomic_read_json
 from polystrat_logger import log
 
 # 配置
-STOP_LOSS_THRESHOLD = -0.10  # 最大亏损10%
+STOP_LOSS_THRESHOLD = 0.10  # 最大累计回撤10%（正数，与 drawdown_pct 比较）
 MAX_POSITION_SIZE = 0.05  # 单笔最大5%资金
 MAX_TOTAL_POSITION = 0.30  # 总仓位最大30%
 MAX_SAME_CATEGORY = 0.20  # 同一类别最大20%
@@ -110,32 +110,34 @@ def check_stop_loss(balance=None, trade_history=None):
         balance = float(os.environ.get("POLYSTRAT_BALANCE", "1000.0"))
 
     # 统计已结算交易的盈亏
-    total_loss = 0.0
+    net_pnl = 0.0
     settled_count = 0
     for t in trade_history:
         result = t.get("result", "pending")
-        if result == "loss":
-            total_loss += t.get("amount", 0)
+        amount = t.get("amount", 0)
+        market_price = t.get("market_price", 0.5)
+        direction = t.get("direction", "Yes")
+        if result == "lose":
+            net_pnl -= amount
             settled_count += 1
         elif result == "win":
-            # 获胜交易按 edge 计算收益（简化：收益 = 金额 × 赔率）
-            amount = t.get("amount", 0)
-            market_price = t.get("market_price", 0.5)
+            # Polymarket 二元合约：投入 amount 买入代币，获胜时每代币赔付 $1
+            # 收益 = amount × ((1 / market_price) - 1) = amount × (1 - market_price) / market_price
             if market_price > 0:
-                total_loss -= amount * (1 - market_price) / market_price
+                net_pnl += amount * (1 - market_price) / market_price
             settled_count += 1
 
-    drawdown_pct = total_loss / balance if balance > 0 else 0
+    drawdown_pct = -net_pnl / balance if balance > 0 else 0  # 正数 = 回撤幅度
 
-    if drawdown_pct < STOP_LOSS_THRESHOLD:
+    if drawdown_pct > STOP_LOSS_THRESHOLD:
         print(
-            f"🚨 止损触发: 累计亏损 {drawdown_pct:.2%} < 阈值 {STOP_LOSS_THRESHOLD:.2%} "
-            f"(已结算 {settled_count} 笔)"
+            f"🚨 止损触发: 累计回撤 {drawdown_pct:.2%} > 阈值 {STOP_LOSS_THRESHOLD:.2%} "
+            f"(已结算 {settled_count} 笔, net_pnl=${net_pnl:+.2f})"
         )
         return {
             "triggered": True,
             "drawdown_pct": drawdown_pct,
-            "reason": f"累计亏损 {drawdown_pct:.2%}",
+            "reason": f"累计回撤 {drawdown_pct:.2%}",
         }
 
     return {"triggered": False, "drawdown_pct": drawdown_pct, "reason": "正常"}

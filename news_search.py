@@ -415,13 +415,6 @@ def search_news_for_market(market_title, max_results=5, use_cache=True):
     return final_results
 
 
-def search_news_simple(query, max_results=5):
-    """
-    简单的新闻搜索
-    """
-    return search_news_for_market(query, max_results)
-
-
 def search_serpapi(query, max_results=5):
     """
     使用 SerpAPI 搜索新闻（Google 搜索结果）

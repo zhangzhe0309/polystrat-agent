@@ -30,11 +30,15 @@ def get_market_volume(market_slug):
         dict: 交易量数据
     """
     try:
-        url = f"{GAMMA_API}/markets/{market_slug}"
-        resp = requests.get(url, timeout=10)
+        url = f"{GAMMA_API}/markets"
+        params = {"slug": market_slug, "limit": 1}
+        resp = requests.get(url, params=params, timeout=10)
 
         if resp.status_code == 200:
-            market = resp.json()
+            markets = resp.json()
+            if not markets:
+                return {"volume": 0, "liquidity": 0, "volume_liquidity_ratio": 0}
+            market = markets[0]
 
             volume = float(market.get("volume", 0))
             liquidity = float(market.get("liquidityNum", 0))
@@ -68,7 +72,7 @@ def get_trending_markets(limit=10):
             "closed": "false",
             "limit": limit * 2,
             "active": "true",
-            "order": "volume24hr",
+            "order": "volume_24hr",
             "ascending": "false",
         }
 
@@ -84,17 +88,23 @@ def get_trending_markets(limit=10):
 
                 # 过滤有交易量的市场
                 if volume > 10000:
+                    try:
+                        prices_str = market.get("outcomePrices", "[0.5]")
+                        if isinstance(prices_str, str):
+                            prices = json.loads(prices_str)
+                        else:
+                            prices = prices_str
+                        yes_price = float(prices[0]) if prices else 0.5
+                    except Exception:
+                        yes_price = 0.5
+
                     trending.append(
                         {
                             "title": market.get("question", ""),
                             "slug": market.get("slug", ""),
                             "volume": volume,
                             "liquidity": liquidity,
-                            "yes_price": float(
-                                json.loads(market.get("outcomePrices", "[0.5]"))[0]
-                            )
-                            if market.get("outcomePrices")
-                            else 0.5,
+                            "yes_price": yes_price,
                         }
                     )
 
@@ -175,11 +185,10 @@ def analyze_volume_change(market_slug, hours=24):
         )
         confidence = min(0.8, 0.4 + abs(change))
     else:
-        # 无历史快照：用 volume/liquidity 比作为代理
-        ratio = current_volume / current_liquidity if current_liquidity > 0 else 0
-        change = ratio
-        trend = "increasing" if ratio > 0.3 else "stable"
-        confidence = 0.3
+        # 无历史快照：无法计算变化，返回 0 和低置信度
+        change = 0
+        trend = "stable"
+        confidence = 0.1
 
     _save_volume_snapshot(market_slug, current_volume, current_liquidity)
 
