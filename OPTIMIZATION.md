@@ -167,7 +167,8 @@
 | 第8轮 | 2 | 4 | ML特征工程扩展（5→15特征） |
 | 第9轮 | 1 | 4 | 新闻源优化（RSS源扩展+解析优化） |
 | 第10轮 | 1 | 6 | 链上信号优化（置信度提升+多因子） |
-| **合计** | **14** | **49** | **核心逻辑缺陷全部修复 + 策略优化 + 信号增强 + ML优化 + 新闻源优化 + 链上信号优化** |
+| 第11轮 | 1 | 8 | 情感分析优化（词汇扩展+权重+否定词+程度词） |
+| **合计** | **15** | **57** | **核心逻辑缺陷全部修复 + 策略优化 + 信号增强 + ML优化 + 新闻源优化 + 链上信号优化 + 情感分析优化** |
 
 ---
 
@@ -672,3 +673,128 @@ signal = {
 - 链上信号置信度提升（从 0.3-0.7 提升到 0.3-0.95）
 - 信号准确性提升（更多因子）
 - 信号类型扩展（增加 sell/strong_sell）
+
+---
+
+## 第十一轮优化 — 情感分析优化（1 文件，8 项修改）
+
+### 43. sentiment_analysis.py — analyze_sentiment_simple 函数优化
+- **旧**：简单关键词匹配（36个词汇）
+- **新**：多因子情感分析（100+词汇、权重区分、否定词处理）
+
+**优化点**：
+1. **扩展关键词列表**：从 36 个扩展到 100+ 个
+2. **添加权重区分**：强情感词权重 2.0，中等 1.5，弱 1.0
+3. **添加否定词处理**：处理 not、no、never 等否定词
+4. **添加程度词处理**：处理 very、extremely、slightly 等程度词
+5. **添加预测市场专用词汇**：odds、probability、likelihood 等
+
+**权重系统**：
+```python
+# 强正面（权重 2.0）
+"bullish": 2.0, "surge": 2.0, "soar": 2.0, "skyrocket": 2.0
+
+# 中等正面（权重 1.5）
+"positive": 1.5, "good": 1.5, "great": 1.5, "excellent": 1.5
+
+# 弱正面（权重 1.0）
+"up": 1.0, "high": 1.0, "gain": 1.0, "improve": 1.0
+```
+
+### 44. sentiment_analysis.py — 否定词处理
+- **旧**：无否定词处理
+- **新**：支持否定词处理（not、no、never 等）
+
+**处理逻辑**：
+- 否定正面词 → 变为负面（如 "not good" → 负面）
+- 否定负面词 → 变为正面（如 "not bad" → 正面）
+
+**否定词列表**：
+```python
+negation_words = {"not", "no", "never", "neither", "nobody", "nothing",
+                  "nowhere", "nor", "cannot", "can't", "won't", "don't",
+                  "doesn't", "didn't", "isn't", "aren't", "wasn't", "weren't"}
+```
+
+### 45. sentiment_analysis.py — 程度词处理
+- **旧**：无程度词处理
+- **新**：支持程度词处理（very、extremely、slightly 等）
+
+**处理逻辑**：
+- 程度词乘以相应权重（very 1.5x，extremely 2.0x，slightly 0.5x）
+
+**程度词列表**：
+```python
+degree_words = {
+    "very": 1.5, "extremely": 2.0, "incredibly": 2.0, "absolutely": 2.0,
+    "completely": 1.5, "totally": 1.5, "utterly": 2.0, "highly": 1.5,
+    "strongly": 1.5, "slightly": 0.5, "somewhat": 0.7, "barely": 0.3,
+}
+```
+
+### 46. sentiment_analysis.py — 预测市场专用词汇
+- **旧**：无预测市场专用词汇
+- **新**：添加预测市场相关词汇
+
+**新增词汇**：
+- 市场术语：odds、probability、likelihood、chance、prediction
+- 情绪词：bullish、bearish、optimistic、pessimistic
+- 结果词：win、lose、success、failure、victory、defeat
+
+### 47. sentiment_analysis.py — analyze_sentiment_with_llm 函数优化
+- **旧**：简单提示词，基础 JSON 解析
+- **新**：详细提示词，更好的解析，关键词提取
+
+**优化点**：
+1. **更详细的提示词**：包含预测市场专用指导
+2. **更好的 JSON 解析**：支持多种格式，处理解析失败
+3. **添加关键词提取**：提取 2-3 个关键情感词
+4. **优化置信度计算**：基于文本明确性
+
+**提示词优化**：
+```python
+prompt = f"""你是一个专业的情感分析师，专门分析预测市场相关新闻。
+
+分析指导：
+1. 关注预测市场相关术语（如：odds, probability, likelihood, chance, prediction）
+2. 关注市场情绪词（如：bullish, bearish, optimistic, pessimistic）
+3. 关注事件结果词（如：win, lose, success, failure, victory, defeat）
+4. 关注程度词（如：very, extremely, slightly, somewhat）
+5. 关注否定词（如：not, no, never, unlikely）
+"""
+```
+
+### 48. sentiment_analysis.py — JSON 解析优化
+- **旧**：简单正则匹配
+- **新**：支持多种格式，处理解析失败
+
+**优化点**：
+- 尝试直接解析 JSON
+- 尝试提取 JSON 部分
+- 处理解析失败，使用关键词判断
+
+### 49. sentiment_analysis.py — 关键词提取
+- **旧**：无关键词提取
+- **新**：提取 2-3 个关键情感词
+
+**目的**：
+- 便于调试和分析
+- 提升 LLM 分析质量
+- 提供更详细的解释
+
+### 50. sentiment_analysis.py — 置信度计算优化
+- **旧**：固定置信度
+- **新**：基于词汇数量和权重计算置信度
+
+**计算公式**：
+```python
+# 基于词汇数量
+total_words = positive_count + negative_count
+confidence = min(1, total_words / 5)  # 5个词汇达到最高置信度
+```
+
+**预期效果**：
+- 情感分析准确性提升（更多词汇、权重区分）
+- 否定词处理能力提升（not good → 负面）
+- 程度词处理能力提升（very good → 强正面）
+- 预测市场相关性提升（专用词汇）
