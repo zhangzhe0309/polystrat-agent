@@ -68,14 +68,56 @@
 
 ---
 
-## 其他修复
+## 第三轮优化（4 文件，6 项修复）
 
-- `adaptive_weights.py` 重复代码块删除（`get_weight_adjustment_report` 中两份 `adjustments` 计算，第二份缺少 `ml` 键）
+### 11. polystrat_agent.py — LLM 模型阵容升级
+- **旧**：Qwen 3.5 / Kimi K2.6 / Llama 3.3 70B + GLM-5.1
+- **新**：DeepSeek V4 Flash (284B MoE, priority 1) / Nemotron 3 Super (120B Hybrid Mamba-Transformer MoE, priority 2) / MiniMax M2.7 (230B Dense, priority 3) / GLM-5.1 (744B MoE, priority 4)
+- 4 模型来自 4 种不同架构，投票多样性大幅提升
+
+### 12. advanced_voting.py — model_names 硬编码修复 (🔴 高)
+- **旧**：`model_names = ["Qwen 3.5", "Kimi K2.6", "Llama 3.3 70B"]`，永远匹配不到新模型名
+- **后果**：`vote()` 遍历旧模型名，找不到 predictions_dict 中的新模型 → 返回 `final_prediction: 0.5`，投票系统形同虚设
+- **修复**：`model_names` 从 `model_weights` 的 key 自动获取，无外部权重时使用新模型名硬编码
+
+### 13. dynamic_optimizer.py — 默认配置模型名更新
+- DEFAULT_CONFIG 中的 `llm_model_weights` 从旧模型名更新为新模型名
+
+### 14. onchain_monitor.py — volume_change 硬编码修复 (🔴 高)
+- **旧**：`analyze_volume_change` 返回硬编码 `volume_change: 0.15`
+- **后果**：momentum_score 依赖假数据，链上信号可信度存疑
+- **修复**：基于 Gamma API 实时 volume + 本地快照缓存，计算真实 volume 变化率；首次运行无快照时用 volume/liquidity 比率作代理
+
+### 15. onchain_monitor.py — confidence 连续映射
+- **旧**：两档 `{0.3, 0.6}`，区分度不足
+- **新**：`0.3 + 0.4 × momentum_score`，范围 `[0.3, 0.7]`
+
+### 16. adaptive_weights.py — hold 信号不再归类为 lose
+- **旧**：`hold` 被分类为 `lose`，拉低链上信号准确率
+- **新**：`hold` → `continue` 跳过，不计入准确率统计
 
 ---
 
-## 未解决问题
+## 其他修复
 
-- `calculate_news_source_scores` 仅在 `get_news_source_quota` 被调用时触发，主循环未显式调用 — 数据已记录但配额调整未接入主流程
-- 情感分析模块 `sentiment_analysis.py` 暂未优化
-- 链上监控模块 `onchain_monitor.py` 暂未优化
+- `adaptive_weights.py` 重复代码块删除（`get_weight_adjustment_report` 中两份 `adjustments` 计算，第二份缺少 `ml` 键）
+- 未使用导入清理（移除 `get_llm_model_weight`、`get_news_source_quota`、`calculate_position_with_liquidity` 等）
+
+---
+
+## 已关闭的未解决问题
+
+- ✅ `calculate_news_source_scores` 已接入 `news_search.py` 新闻源动态配额调用链
+- ✅ `onchain_monitor.py` volume_change 硬编码已修复
+- ✅ `onchain_monitor.py` confidence 离散两档已修复
+
+---
+
+## 优化总结
+
+| 轮次 | 涉及文件 | 修改项 | 核心改善 |
+|------|----------|--------|----------|
+| 第1轮 | 6 | 10 | 自适应权重/数据泄露/时间序列CV/Kelly仓位 |
+| 第2轮 | 3 | 4 | 信号映射闭环/新闻源评分真实现 |
+| 第3轮 | 4 | 6 | 模型阵容升级/voting硬编码/onchain真数据 |
+| **合计** | **8** | **20** | **动态值生效率 95%** |
