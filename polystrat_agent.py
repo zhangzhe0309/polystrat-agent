@@ -10,6 +10,7 @@
 6. 自动下单（DRY_RUN 模式）
 7. 输出结果（Hermes Cron 推送）
 """
+
 import os
 import sys
 import json
@@ -31,14 +32,23 @@ from multi_platform import get_multiplatform_signal
 from smart_keywords import get_search_queries
 from advanced_voting import create_voting_system
 from dynamic_optimizer import (
-    calculate_llm_model_weights, get_llm_model_weight,
-    get_news_source_quota, calculate_position_with_liquidity,
-    get_dynamic_price_thresholds, get_dynamic_dedup_hours,
-    format_optimization_report)
+    calculate_llm_model_weights,
+    get_llm_model_weight,
+    get_news_source_quota,
+    calculate_position_with_liquidity,
+    get_dynamic_price_thresholds,
+    get_dynamic_dedup_hours,
+    format_optimization_report,
+)
 from polystrat_logger import log, log_error, log_api_call, log_performance
 from safe_file_ops import atomic_write_json, atomic_read_json, append_to_json_array
 from circuit_breaker import check_breaker, record_trade_result, get_breaker_status
-from trade_limits import check_trade_allowed, record_trade, get_limits_status
+from trade_limits import (
+    check_trade_allowed,
+    record_trade,
+    get_limits_status,
+    LIMITS_CONFIG,
+)
 
 # === 配置 ===
 # LLM Ensemble 链：多模型投票 + 多 API Key 容错
@@ -90,10 +100,10 @@ MIN_LIQUIDITY = 5000  # 最小流动性 $5000
 # 权重配置（优化后：降低LLM共线性风险，提高ML/链上权重）
 # 信号源: LLM, 情感, 链上, ML
 SIGNAL_WEIGHTS = {
-    "llm": 0.25,        # LLM 分析权重（降低，避免与情感信号共线性）
+    "llm": 0.25,  # LLM 分析权重（降低，避免与情感信号共线性）
     "sentiment": 0.15,  # 新闻情感权重（降低，与LLM有重叠）
-    "onchain": 0.30,    # 链上信号权重（提高，更独立的数据源）
-    "ml": 0.30,         # ML 信号权重（提高，数据驱动）
+    "onchain": 0.30,  # 链上信号权重（提高，更独立的数据源）
+    "ml": 0.30,  # ML 信号权重（提高，数据驱动）
 }
 
 # 验证权重归一化
@@ -177,42 +187,156 @@ def fetch_active_markets(limit=20):
 
             # 检测市场分类（扩展分类）
             title_lower = title.lower()
-            if any(x in title_lower for x in ['bitcoin', 'btc', 'crypto', 'eth', 'solana', 'blockchain', 'defi']):
+            if any(
+                x in title_lower
+                for x in [
+                    "bitcoin",
+                    "btc",
+                    "crypto",
+                    "eth",
+                    "solana",
+                    "blockchain",
+                    "defi",
+                ]
+            ):
                 category = "Crypto"
-            elif any(x in title_lower for x in ['trump', 'biden', 'election', 'president', 'democrat', 'republican', 'newsom', 'aoc', 'congress', 'senate']):
+            elif any(
+                x in title_lower
+                for x in [
+                    "trump",
+                    "biden",
+                    "election",
+                    "president",
+                    "democrat",
+                    "republican",
+                    "newsom",
+                    "aoc",
+                    "congress",
+                    "senate",
+                ]
+            ):
                 category = "Politics"
-            elif any(x in title_lower for x in ['world cup', 'fifa', 'soccer', 'football', 'nba', 'nfl', 'mlb', 'tennis', 'golf', 'boxing']):
+            elif any(
+                x in title_lower
+                for x in [
+                    "world cup",
+                    "fifa",
+                    "soccer",
+                    "football",
+                    "nba",
+                    "nfl",
+                    "mlb",
+                    "tennis",
+                    "golf",
+                    "boxing",
+                ]
+            ):
                 category = "Sports"
-            elif any(x in title_lower for x in ['gta', 'album', 'movie', 'oscar', 'grammy', 'rihanna', 'carti', 'taylor', 'beyonce', 'kanye']):
+            elif any(
+                x in title_lower
+                for x in [
+                    "gta",
+                    "album",
+                    "movie",
+                    "oscar",
+                    "grammy",
+                    "rihanna",
+                    "carti",
+                    "taylor",
+                    "beyonce",
+                    "kanye",
+                ]
+            ):
                 category = "Entertainment"
-            elif any(x in title_lower for x in ['war', 'china', 'russia', 'iran', 'ukraine', 'taiwan', 'israel', 'nato', 'military']):
+            elif any(
+                x in title_lower
+                for x in [
+                    "war",
+                    "china",
+                    "russia",
+                    "iran",
+                    "ukraine",
+                    "taiwan",
+                    "israel",
+                    "nato",
+                    "military",
+                ]
+            ):
                 category = "Geopolitics"
-            elif any(x in title_lower for x in ['fed', 'interest', 'inflation', 'gdp', 'stock', 'recession', 'economy', 'unemployment']):
+            elif any(
+                x in title_lower
+                for x in [
+                    "fed",
+                    "interest",
+                    "inflation",
+                    "gdp",
+                    "stock",
+                    "recession",
+                    "economy",
+                    "unemployment",
+                ]
+            ):
                 category = "Economics"
-            elif any(x in title_lower for x in ['ai', 'artificial intelligence', 'chatgpt', 'openai', 'google', 'apple', 'tech']):
+            elif any(
+                x in title_lower
+                for x in [
+                    "ai",
+                    "artificial intelligence",
+                    "chatgpt",
+                    "openai",
+                    "google",
+                    "apple",
+                    "tech",
+                ]
+            ):
                 category = "Technology"
-            elif any(x in title_lower for x in ['climate', 'weather', 'hurricane', 'earthquake', 'flood', 'temperature']):
+            elif any(
+                x in title_lower
+                for x in [
+                    "climate",
+                    "weather",
+                    "hurricane",
+                    "earthquake",
+                    "flood",
+                    "temperature",
+                ]
+            ):
                 category = "Weather"
-            elif any(x in title_lower for x in ['space', 'nasa', 'spacex', 'mars', 'moon', 'rocket']):
+            elif any(
+                x in title_lower
+                for x in ["space", "nasa", "spacex", "mars", "moon", "rocket"]
+            ):
                 category = "Science"
-            elif any(x in title_lower for x in ['health', 'covid', 'vaccine', 'disease', 'pandemic', 'hospital']):
+            elif any(
+                x in title_lower
+                for x in [
+                    "health",
+                    "covid",
+                    "vaccine",
+                    "disease",
+                    "pandemic",
+                    "hospital",
+                ]
+            ):
                 category = "Health"
             else:
                 category = "Other"
 
-            valid.append({
-                "title": title,
-                "yes_price": yes_price,
-                "no_price": 1.0 - yes_price,
-                "liquidity": liquidity,
-                "condition_id": cid,
-                "yes_token": token_list[0] if len(token_list) > 0 else "",
-                "no_token": token_list[1] if len(token_list) > 1 else "",
-                "slug": slug,
-                "outcomes": outcome_list,
-                "end_date": end_date,
-                "category": category,
-            })
+            valid.append(
+                {
+                    "title": title,
+                    "yes_price": yes_price,
+                    "no_price": 1.0 - yes_price,
+                    "liquidity": liquidity,
+                    "condition_id": cid,
+                    "yes_token": token_list[0] if len(token_list) > 0 else "",
+                    "no_token": token_list[1] if len(token_list) > 1 else "",
+                    "slug": slug,
+                    "outcomes": outcome_list,
+                    "end_date": end_date,
+                    "category": category,
+                }
+            )
         return valid
     except Exception as e:
         print(f"❌ 获取市场失败: {e}")
@@ -234,8 +358,8 @@ def search_news(query, max_results=3):
         # 提取结果片段
         results = []
         # 从 HTML 中提取文本内容
-        clean = re.sub(r'<[^>]+>', ' ', text)
-        clean = re.sub(r'\s+', ' ', clean)
+        clean = re.sub(r"<[^>]+>", " ", text)
+        clean = re.sub(r"\s+", " ", clean)
         # 取前 2000 字符作为上下文
         context = clean[:2000]
         return context
@@ -243,7 +367,9 @@ def search_news(query, max_results=3):
         return ""
 
 
-def llm_analyze_probability(market_title, news_context, current_yes_price, category="Other"):
+def llm_analyze_probability(
+    market_title, news_context, current_yes_price, category="Other"
+):
     """使用多 LLM 分析市场概率，使用高级投票系统（加权+异常值过滤）"""
     if not LLM_PROVIDERS:
         return None, [], {}
@@ -257,14 +383,14 @@ def llm_analyze_probability(market_title, news_context, current_yes_price, categ
         "Geopolitics": "这是一个地缘政治市场。关注国际关系、冲突动态、外交进展。",
         "Economics": "这是一个经济市场。关注经济数据、央行政策、市场预期。",
     }
-    
+
     context_hint = category_context.get(category, "请综合分析相关信息。")
 
     prompt = f"""你是一个预测市场分析师。根据以下信息，判断这个预测市场事件发生的概率。
 
 市场问题: {market_title}
 市场分类: {category}
-当前市场价: Yes = {current_yes_price*100:.0f}¢ (即市场认为有 {current_yes_price*100:.0f}% 的概率)
+当前市场价: Yes = {current_yes_price * 100:.0f}¢ (即市场认为有 {current_yes_price * 100:.0f}% 的概率)
 
 分析提示: {context_hint}
 
@@ -302,7 +428,7 @@ def llm_analyze_probability(market_title, news_context, current_yes_price, categ
                     break  # 限流，跳到下一个 provider
                 resp.raise_for_status()
                 content = resp.json()["choices"][0]["message"]["content"].strip()
-                match = re.search(r'(\d+)', content)
+                match = re.search(r"(\d+)", content)
                 if match:
                     prob = int(match.group(1))
                     if 0 <= prob <= 100:
@@ -319,21 +445,25 @@ def llm_analyze_probability(market_title, news_context, current_yes_price, categ
     if predictions_dict:
         voting_system = create_voting_system()
         vote_result = voting_system.vote(predictions_dict)
-        
+
         avg = vote_result["final_prediction"] / 100.0
         confidence = vote_result["confidence"]
         disagreement = vote_result["disagreement"]
-        
+
         # 记录投票详情
         if vote_result["need_review"]:
             log.warning(f"LLM投票分歧大: {disagreement:.1f}%, 置信度: {confidence:.2f}")
-        
-        return avg, model_results, {
-            "confidence": confidence,
-            "disagreement": disagreement,
-            "need_review": vote_result["need_review"]
-        }
-    
+
+        return (
+            avg,
+            model_results,
+            {
+                "confidence": confidence,
+                "disagreement": disagreement,
+                "need_review": vote_result["need_review"],
+            },
+        )
+
     return None, [], {}
 
 
@@ -342,7 +472,7 @@ def place_order(token_id, side, amount, price):
     if DRY_RUN:
         return {
             "status": "DRY_RUN",
-            "message": f"模拟 {side} ${amount:.2f} @ {price*100:.0f}¢"
+            "message": f"模拟 {side} ${amount:.2f} @ {price * 100:.0f}¢",
         }
 
     try:
@@ -396,41 +526,78 @@ def format_output(decisions):
         category = market.get("category", "")
 
         # 显示所有分析过的市场
-        emoji = "🟢" if abs(edge) >= EDGE_THRESHOLD and trades_made < MAX_TRADES_PER_RUN else "⚪"
-        cat_emoji = {"Crypto": "₿", "Politics": "🏛", "Sports": "⚽", "Entertainment": "🎬", "Geopolitics": "🌍", "Economics": "📊", "Technology": "🤖", "Weather": "🌤", "Science": "🔬", "Health": "🏥"}.get(category, "📌")
+        emoji = (
+            "🟢"
+            if abs(edge) >= EDGE_THRESHOLD and trades_made < MAX_TRADES_PER_RUN
+            else "⚪"
+        )
+        cat_emoji = {
+            "Crypto": "₿",
+            "Politics": "🏛",
+            "Sports": "⚽",
+            "Entertainment": "🎬",
+            "Geopolitics": "🌍",
+            "Economics": "📊",
+            "Technology": "🤖",
+            "Weather": "🌤",
+            "Science": "🔬",
+            "Health": "🏥",
+        }.get(category, "📌")
         lines.append(f"{emoji} {cat_emoji} {market['title'][:50]}")
-        lines.append(f"   市场价: Yes {market['yes_price']*100:.0f}¢ | No {market['no_price']*100:.0f}¢")
-        lines.append(f"   AI判断: Yes {d['llm_prob']*100:.0f}¢")
+        lines.append(
+            f"   市场价: Yes {market['yes_price'] * 100:.0f}¢ | No {market['no_price'] * 100:.0f}¢"
+        )
+        lines.append(f"   AI判断: Yes {d['llm_prob'] * 100:.0f}¢")
         # 显示情感分析
         sentiment_score = d.get("sentiment_score", 0)
         if sentiment_score != 0:
-            sentiment_label = "正面" if sentiment_score > 0.1 else "负面" if sentiment_score < -0.1 else "中性"
+            sentiment_label = (
+                "正面"
+                if sentiment_score > 0.1
+                else "负面"
+                if sentiment_score < -0.1
+                else "中性"
+            )
             lines.append(f"   新闻情感: {sentiment_label} ({sentiment_score:+.2f})")
         # 显示链上信号
         onchain_signal = d.get("onchain_signal", {})
         if onchain_signal and onchain_signal.get("recommendation") != "hold":
-            lines.append(f"   链上信号: {onchain_signal.get('recommendation', 'hold')} (置信度: {onchain_signal.get('confidence', 0):.2f})")
+            lines.append(
+                f"   链上信号: {onchain_signal.get('recommendation', 'hold')} (置信度: {onchain_signal.get('confidence', 0):.2f})"
+            )
         # 显示 ML 信号
         ml_signal = d.get("ml_signal", {})
         if ml_signal and ml_signal.get("confidence", 0) > 0.5:
-            lines.append(f"   ML信号: {ml_signal.get('recommendation', '数据不足')} (置信度: {ml_signal.get('confidence', 0):.2f})")
+            lines.append(
+                f"   ML信号: {ml_signal.get('recommendation', '数据不足')} (置信度: {ml_signal.get('confidence', 0):.2f})"
+            )
         # 显示套利机会
         arbitrage_opportunities = d.get("arbitrage_opportunities", [])
         if arbitrage_opportunities:
             lines.append(f"   🔥 套利机会: {len(arbitrage_opportunities)} 个")
             for opp in arbitrage_opportunities[:1]:
-                lines.append(f"      买入: {opp.get('buy_platform', '')} @ {opp.get('buy_price', 0):.2f}")
-                lines.append(f"      卖出: {opp.get('sell_platform', '')} @ {opp.get('sell_price', 0):.2f}")
+                lines.append(
+                    f"      买入: {opp.get('buy_platform', '')} @ {opp.get('buy_price', 0):.2f}"
+                )
+                lines.append(
+                    f"      卖出: {opp.get('sell_platform', '')} @ {opp.get('sell_price', 0):.2f}"
+                )
                 lines.append(f"      利润: {opp.get('profit_pct', 0):.1f}%")
         # 显示最终概率
-        final_prob = d.get("final_prob", d['llm_prob'])
-        if abs(final_prob - d['llm_prob']) > 0.01:
-            lines.append(f"   综合判断: Yes {final_prob*100:.0f}¢")
+        final_prob = d.get("final_prob", d["llm_prob"])
+        if abs(final_prob - d["llm_prob"]) > 0.01:
+            lines.append(f"   综合判断: Yes {final_prob * 100:.0f}¢")
         # 显示各模型判断
         model_results = d.get("model_results", [])
         if model_results:
             lines.append(f"   模型投票: {' | '.join(model_results)}")
-        lines.append(f"   优势: {direction} {abs(edge)*100:+.1f}%")
+        lines.append(f"   优势: {direction} {abs(edge) * 100:+.1f}%")
+        # 显示投票置信度
+        vote_details = d.get("vote_details", {})
+        if vote_details:
+            vconf = vote_details.get("confidence", 0)
+            vdis = vote_details.get("disagreement", 0)
+            lines.append(f"   投票置信: {vconf:.2f} | 分歧: {vdis:.1f}")
         # 显示风险检查
         risk_check = d.get("risk_check", {})
         if risk_check and not risk_check.get("should_trade", True):
@@ -472,10 +639,11 @@ def format_output(decisions):
 def main():
     """主流程（集成新闻搜索、情感分析、风险管理、自适应权重 + 动态优化）"""
     import time as _time
+
     start_time = _time.time()
     log.info("=" * 50)
     log.info("PolyStrat 启动")
-    
+
     # 1. 获取活跃市场（取前10个，减少处理时间）
     markets = fetch_active_markets(limit=10)
     if not markets:
@@ -486,21 +654,23 @@ def main():
 
     # 获取账户余额（从配置读取）
     balance = float(os.environ.get("POLYSTRAT_BALANCE", "1000.0"))
-    
+
     # 加载交易历史并计算自适应权重
     trade_history = load_trade_history()
     adaptive_weights = calculate_adaptive_weights(trade_history)
-    
+
     # === 动态优化：LLM 模型权重 + 价格阈值 ===
     llm_model_weights = calculate_llm_model_weights(trade_history)
     dynamic_thresholds = get_dynamic_price_thresholds(trade_history)
-    
+
     # === 修复：构建已交易市场集合（动态去重窗口） ===
     traded_markets_24h = set()
     now = datetime.now(timezone.utc)
     for t in trade_history:
         try:
-            trade_time = datetime.fromisoformat(t.get("timestamp", "").replace("Z", "+00:00"))
+            trade_time = datetime.fromisoformat(
+                t.get("timestamp", "").replace("Z", "+00:00")
+            )
             hours_ago = (now - trade_time).total_seconds() / 3600
             # 使用动态去重窗口
             dedup_hours = get_dynamic_dedup_hours(t.get("end_date", ""))
@@ -514,28 +684,53 @@ def main():
                     traded_markets_24h.add(t.get("market", "").lower())
         except Exception:
             pass
-    
-    # 使用自适应权重
-    llm_weight = adaptive_weights.get("llm_weight", LLM_WEIGHT)
-    sentiment_weight = adaptive_weights.get("sentiment_weight", 0.3)
-    onchain_weight = adaptive_weights.get("onchain_weight", 0.2)
+
+    # 使用自适应权重（包含4信号 + 动态阈值）
+    llm_weight = adaptive_weights.get("llm_weight", SIGNAL_WEIGHTS["llm"])
+    sentiment_weight = adaptive_weights.get(
+        "sentiment_weight", SIGNAL_WEIGHTS["sentiment"]
+    )
+    onchain_weight = adaptive_weights.get("onchain_weight", SIGNAL_WEIGHTS["onchain"])
+    ml_weight = adaptive_weights.get("ml_weight", SIGNAL_WEIGHTS["ml"])
     edge_threshold = adaptive_weights.get("edge_threshold", EDGE_THRESHOLD)
-    
+
+    # 归一化确保4信号权重总和=1.0
+    adaptive_weight_sum = llm_weight + sentiment_weight + onchain_weight + ml_weight
+    if abs(adaptive_weight_sum - 1.0) > 0.01:
+        llm_weight /= adaptive_weight_sum
+        sentiment_weight /= adaptive_weight_sum
+        onchain_weight /= adaptive_weight_sum
+        ml_weight /= adaptive_weight_sum
+
+    # 多平台/套利信号权重（从各信号等比抽取，保持总和1.0）
+    ARBITRAGE_WEIGHT = 0.05
+    llm_weight *= 1 - ARBITRAGE_WEIGHT
+    sentiment_weight *= 1 - ARBITRAGE_WEIGHT
+    onchain_weight *= 1 - ARBITRAGE_WEIGHT
+    ml_weight *= 1 - ARBITRAGE_WEIGHT
+
     # 输出权重配置（包含动态优化信息）
     print(f"⚖️ 自适应权重配置:")
-    print(f"   LLM: {llm_weight:.3f} | 情感: {sentiment_weight:.3f} | 链上: {onchain_weight:.3f}")
-    print(f"   优势阈值: {edge_threshold:.2%}")
+    print(
+        f"   LLM: {llm_weight:.3f} | 情感: {sentiment_weight:.3f} | 链上: {onchain_weight:.3f} | ML: {ml_weight:.3f}"
+    )
+    print(f"   优势阈值: {edge_threshold:.2%} | 套利信号: {ARBITRAGE_WEIGHT:.0%}")
+    print(
+        f"   情感斜率: {adaptive_weights.get('sentiment_mapping_slope', 0.35):.2f} | 链上乘数: {adaptive_weights.get('onchain_multiplier', 1.0):.2f}"
+    )
     print(f"   样本大小: {adaptive_weights.get('sample_size', 0)}")
     print()
-    
+
     # 输出 LLM 模型动态权重
     print(f"🤖 LLM 模型动态权重:")
     for model, weight in llm_model_weights.items():
         print(f"   {model}: {weight:.1%}")
     print()
-    
+
     # 输出动态价格阈值
-    print(f"💰 动态价格阈值: {dynamic_thresholds['min_price']:.0%} - {dynamic_thresholds['max_price']:.0%}")
+    print(
+        f"💰 动态价格阈值: {dynamic_thresholds['min_price']:.0%} - {dynamic_thresholds['max_price']:.0%}"
+    )
     print()
 
     for market in markets:
@@ -546,13 +741,16 @@ def main():
         condition_id = market.get("condition_id", "")  # 唯一标识，用于去重
 
         # 跳过极端价格（>97¢ 或 <3¢ 的市场没太大空间）
-        if yes_price > dynamic_thresholds["max_price"] or yes_price < dynamic_thresholds["min_price"]:
+        if (
+            yes_price > dynamic_thresholds["max_price"]
+            or yes_price < dynamic_thresholds["min_price"]
+        ):
             continue
 
         # 跳过低流动性市场
         if liquidity < MIN_LIQUIDITY:
             continue
-        
+
         # === 修复：跳过DEDUP_HOURS小时内已交易的市场（用 condition_id 去重） ===
         dedup_key = condition_id if condition_id else title.lower()
         if dedup_key in traded_markets_24h:
@@ -562,17 +760,17 @@ def main():
         # 2. 搜索相关新闻（使用智能关键词 + news_search 模块）
         search_queries = get_search_queries(title, category, max_queries=2)
         search_query = search_queries[0] if search_queries else title[:50]
-        
+
         # 打印使用的关键词（调试用）
         print(f"🔍 搜索关键词: {search_query}")
-        
+
         try:
             # 使用多个关键词搜索，合并结果
             all_news = []
             for query in search_queries[:2]:
                 news = search_news_for_market(query, max_results=2)
                 all_news.extend(news)
-            
+
             # 去重
             seen_titles = set()
             news_list = []
@@ -581,10 +779,12 @@ def main():
                 if t and t not in seen_titles:
                     seen_titles.add(t)
                     news_list.append(n)
-            
+
+            news_sources = list(set(n.get("source_type", "unknown") for n in news_list))
             news_text = "\n".join([n.get("title", "") for n in news_list[:3]])
         except Exception as e:
             news_list = []
+            news_sources = []
             news_text = ""
             print(f"⚠️ 新闻搜索失败: {e}")
 
@@ -592,13 +792,18 @@ def main():
         try:
             # 使用简单情感分析（快速）
             from sentiment_analysis import analyze_sentiment_simple
+
             if news_list:
                 sentiment_scores = []
                 for news in news_list[:2]:
                     text = news.get("title", "") + " " + news.get("description", "")
                     result = analyze_sentiment_simple(text)
                     sentiment_scores.append(result["score"])
-                sentiment_score = sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else 0
+                sentiment_score = (
+                    sum(sentiment_scores) / len(sentiment_scores)
+                    if sentiment_scores
+                    else 0
+                )
                 sentiment_confidence = 0.5
             else:
                 sentiment_score = 0
@@ -623,7 +828,9 @@ def main():
         try:
             multiplatform_signal = get_multiplatform_signal(title)
             has_arbitrage = multiplatform_signal.get("arbitrage_count", 0) > 0
-            arbitrage_opportunities = multiplatform_signal.get("arbitrage_opportunities", [])
+            arbitrage_opportunities = multiplatform_signal.get(
+                "arbitrage_opportunities", []
+            )
         except Exception as e:
             multiplatform_signal = {"found": False, "arbitrage_count": 0}
             has_arbitrage = False
@@ -631,10 +838,12 @@ def main():
             print(f"⚠️ 多平台信号分析失败: {e}")
 
         # 6. LLM 分析概率（使用高级投票系统，返回加权平均和投票详情）
-        llm_prob, model_results, vote_details = llm_analyze_probability(title, news_text, yes_price, category)
+        llm_prob, model_results, vote_details = llm_analyze_probability(
+            title, news_text, yes_price, category
+        )
         if llm_prob is None:
             continue
-        
+
         # 记录投票详情
         if vote_details.get("need_review"):
             log.warning(f"市场 '{title[:30]}' LLM投票分歧大，置信度低")
@@ -646,48 +855,63 @@ def main():
                 sentiment_score,
                 0,  # edge 在后面计算
                 yes_price,
-                "Yes" if llm_prob > yes_price else "No"
+                "Yes" if llm_prob > yes_price else "No",
             )
             ml_prob = ml_signal.get("ml_prob", 0.5)
             ml_confidence = ml_signal.get("confidence", 0.5)
         except Exception as e:
-            ml_signal = {"ml_prob": 0.5, "confidence": 0.5, "recommendation": "数据不足"}
+            ml_signal = {
+                "ml_prob": 0.5,
+                "confidence": 0.5,
+                "recommendation": "数据不足",
+            }
             ml_prob = 0.5
             ml_confidence = 0.5
             print(f"⚠️ ML 信号分析失败: {e}")
 
         # 7. 综合判断（各信号独立计算概率，然后加权平均）
         # 所有信号统一为概率格式 (0-1)
-        
+        # 权重来自自适应权重模块（基于历史胜率动态调整）
+
         # 信号1: LLM 概率（已经是概率，直接使用）
         llm_signal_prob = llm_prob
-        
+
         # 信号2: 情感概率（将 sentiment_score 转换为概率）
-        # sentiment_score 范围 -1 到 1，映射到 0.3-0.7
-        sentiment_signal_prob = 0.5 + sentiment_score * 0.2
-        sentiment_signal_prob = max(0.3, min(0.7, sentiment_signal_prob))
-        
-        # 信号3: 链上概率（将 recommendation 转换为概率）
-        onchain_signal_prob = 0.5
+        # 使用自适应映射斜率（基于情感信号历史准确率）
+        sentiment_mapping_slope = adaptive_weights.get("sentiment_mapping_slope", 0.35)
+        sentiment_signal_prob = 0.5 + sentiment_score * sentiment_mapping_slope
+        sentiment_signal_prob = max(0.15, min(0.85, sentiment_signal_prob))
+
+        # 信号3: 链上概率（连续映射，纳入置信度 × 自适应乘数）
+        onchain_confidence_val = onchain_signal.get("confidence", 0.3)
+        onchain_mult = adaptive_weights.get("onchain_multiplier", 1.0)
         if onchain_recommendation == "strong_buy":
-            onchain_signal_prob = 0.7
+            onchain_signal_prob = 0.5 + 0.35 * onchain_confidence_val * onchain_mult
         elif onchain_recommendation == "buy":
-            onchain_signal_prob = 0.6
+            onchain_signal_prob = 0.5 + 0.15 * onchain_confidence_val * onchain_mult
         elif onchain_recommendation == "sell":
-            onchain_signal_prob = 0.4
-        
+            onchain_signal_prob = 0.5 - 0.15 * onchain_confidence_val * onchain_mult
+        else:
+            onchain_signal_prob = 0.5
+
         # 信号4: ML 概率（已经是概率，直接使用）
         ml_signal_prob = ml_prob
-        
-        # 使用统一权重配置进行加权平均
-        # 权重已归一化，总和=1.0
+
+        # 信号5: 多平台/套利信号（有套利机会 → 置信度加成）
+        if has_arbitrage:
+            arbitrage_signal = 0.5 + min(0.2, len(arbitrage_opportunities) * 0.03)
+        else:
+            arbitrage_signal = 0.5
+
+        # 使用自适应权重进行加权平均（含套利信号）
         final_prob = (
-            llm_signal_prob * SIGNAL_WEIGHTS["llm"] +
-            sentiment_signal_prob * SIGNAL_WEIGHTS["sentiment"] +
-            onchain_signal_prob * SIGNAL_WEIGHTS["onchain"] +
-            ml_signal_prob * SIGNAL_WEIGHTS["ml"]
+            llm_signal_prob * llm_weight
+            + sentiment_signal_prob * sentiment_weight
+            + onchain_signal_prob * onchain_weight
+            + ml_signal_prob * ml_weight
+            + arbitrage_signal * ARBITRAGE_WEIGHT
         )
-        
+
         # 边界检查
         final_prob = max(0.01, min(0.99, final_prob))  # 防止极端值
 
@@ -703,12 +927,13 @@ def main():
             token_id = market["no_token"]
             order_price = market["no_price"]
 
-        # 7. 风险检查
+        # 7. 风险检查（使用投票置信度，而非情感置信度）
+        voting_confidence = vote_details.get("confidence", sentiment_confidence)
         should_trade_flag, risk_reason = should_trade(
             market,
-            confidence=sentiment_confidence,
+            confidence=voting_confidence,
             news_sentiment=sentiment_score,
-            balance=balance
+            balance=balance,
         )
 
         decision = {
@@ -725,27 +950,50 @@ def main():
             "order_result": None,
             "model_results": model_results,
             "vote_details": vote_details,  # 投票详情（置信度、分歧度）
-            "risk_check": {"should_trade": should_trade_flag, "reason": risk_reason}
+            "risk_check": {"should_trade": should_trade_flag, "reason": risk_reason},
         }
 
         # 8. 如果优势足够大，且通过风险检查，下单
-        if abs(edge) >= edge_threshold and trades_made < MAX_TRADES_PER_RUN and token_id and should_trade_flag:
+        if (
+            abs(edge) >= edge_threshold
+            and trades_made < MAX_TRADES_PER_RUN
+            and token_id
+            and should_trade_flag
+        ):
             # 检查断路器
             if not check_breaker():
                 log.warning("断路器已断开，跳过交易")
                 decision["order_result"] = {"status": "BLOCKED", "reason": "断路器断开"}
                 decisions.append(decision)
                 continue
-            
-            # 计算仓位大小（使用流动性适配版本）
-            # 内置硬上限: min(流动性调整, 余额5%, 基础仓位2倍)
-            position_size = calculate_position_with_liquidity(
-                balance, 
-                sentiment_confidence, 
-                liquidity,
-                base_amount=BET_AMOUNT
+
+            # 计算仓位大小（Fractional Kelly + 投票置信度 + 流动性适配）
+            # Kelly 公式: f* = edge / (1 - market_price) for Yes bets
+            kelly_fraction = 0.25  # 25% Kelly 保守策略
+            if direction == "Yes":
+                kelly_pct = edge / (1 - yes_price) if (1 - yes_price) > 0.01 else 0
+            else:
+                kelly_pct = abs(edge) / yes_price if yes_price > 0.01 else 0
+            kelly_pct = max(0, min(0.5, kelly_pct))  # 限制单笔不超过50%
+            kelly_position = balance * kelly_pct * kelly_fraction * voting_confidence
+
+            # 流动性调整
+            if liquidity >= 50000:
+                liquidity_factor = 1.5
+            elif liquidity >= 10000:
+                liquidity_factor = 1.0
+            else:
+                liquidity_factor = max(0.3, liquidity / 10000)
+
+            # 最终仓位 = min(Kelly × 流动性调整, 硬上限)
+            # trade_limits.check_trade_allowed 进一步限制单笔≤$10、仓位≤5%
+            position_size = min(
+                kelly_position * liquidity_factor,
+                balance * 0.05,
+                LIMITS_CONFIG["max_single_trade"],
             )
-            
+            position_size = round(max(0.5, position_size), 2)
+
             # 检查交易限额
             allowed, limit_reason = check_trade_allowed(position_size, balance)
             if not allowed:
@@ -753,32 +1001,40 @@ def main():
                 decision["order_result"] = {"status": "BLOCKED", "reason": limit_reason}
                 decisions.append(decision)
                 continue
-            
+
             result = place_order(token_id, "BUY", position_size, order_price)
             decision["order_result"] = result
 
-            # 记录交易（包含 condition_id 用于去重）
-            save_trade({
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "mode": "DRY_RUN" if DRY_RUN else "LIVE",
-                "market": title,
-                "condition_id": condition_id,
-                "category": category,
-                "direction": direction,
-                "market_price": yes_price if direction == "Yes" else market["no_price"],
-                "llm_prob": llm_prob,
-                "sentiment_score": sentiment_score,
-                "final_prob": final_prob,
-                "edge": edge,
-                "amount": position_size,
-                "status": result.get("status"),
-                "token_id": token_id,
-                "risk_reason": risk_reason,
-                "end_date": market.get("end_date", ""),
-                "result": "pending"  # 初始状态：待结算
-            })
+            # 记录交易（包含 condition_id 用于去重，含信号数据用于自适应学习）
+            save_trade(
+                {
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "mode": "DRY_RUN" if DRY_RUN else "LIVE",
+                    "market": title,
+                    "condition_id": condition_id,
+                    "category": category,
+                    "direction": direction,
+                    "market_price": yes_price
+                    if direction == "Yes"
+                    else market["no_price"],
+                    "llm_prob": llm_prob,
+                    "sentiment_score": sentiment_score,
+                    "onchain_signal": onchain_signal,
+                    "ml_prob": ml_prob,
+                    "model_results": model_results,
+                    "final_prob": final_prob,
+                    "edge": edge,
+                    "amount": position_size,
+                    "status": result.get("status"),
+                    "token_id": token_id,
+                    "risk_reason": risk_reason,
+                    "news_sources": news_sources,
+                    "end_date": market.get("end_date", ""),
+                    "result": "pending",  # 初始状态：待结算
+                }
+            )
             trades_made += 1
-            
+
             # 记录到交易限额
             record_trade(position_size)
 
@@ -791,7 +1047,7 @@ def main():
     output = format_output(decisions)
     if output:
         print(output)
-    
+
     # 10. 输出风险报告
     try:
         risk_report = get_risk_report()
@@ -802,27 +1058,33 @@ def main():
     except Exception as e:
         log_error("main", e, "风险报告生成失败")
         print(f"⚠️ 风险报告生成失败: {e}")
-    
+
     # 11. 输出断路器状态
     try:
         breaker_status = get_breaker_status()
         status_emoji = {"closed": "🟢", "open": "🔴", "half_open": "🟡"}
         print(f"\n⚡ 断路器状态:")
-        print(f"   状态: {status_emoji.get(breaker_status['status'], '❓')} {breaker_status['status']}")
+        print(
+            f"   状态: {status_emoji.get(breaker_status['status'], '❓')} {breaker_status['status']}"
+        )
         print(f"   连续亏损: {breaker_status['consecutive_losses']}")
         print(f"   今日盈亏: ${breaker_status['daily_pnl']:+.2f}")
     except Exception as e:
         log_error("main", e, "断路器状态获取失败")
-    
+
     # 12. 输出交易限额状态
     try:
         limits_status = get_limits_status()
         print(f"\n📊 交易限额:")
-        print(f"   今日交易: {limits_status['daily_trades']}/{limits_status['max_daily_trades']}")
-        print(f"   今日交易量: ${limits_status['daily_volume']:.2f}/${limits_status['max_daily_volume']:.2f}")
+        print(
+            f"   今日交易: {limits_status['daily_trades']}/{limits_status['max_daily_trades']}"
+        )
+        print(
+            f"   今日交易量: ${limits_status['daily_volume']:.2f}/${limits_status['max_daily_volume']:.2f}"
+        )
     except Exception as e:
         log_error("main", e, "交易限额状态获取失败")
-    
+
     # 输出动态优化报告
     try:
         print(format_optimization_report())
