@@ -37,7 +37,8 @@ polystrat-agent/
 ├── smart_keywords.py       # 智能关键词提取
 ├── polystrat_logger.py     # 统一日志系统
 ├── quick_review.py         # 快速评审脚本
-├── POLYSTRAT_REVIEW.md     # 评审机制文档
+├── circuit_breaker.py      # 断路器
+├── trade_limits.py         # 交易限额
 ├── OPTIMIZATION.md         # 策略优化记录
 └── README.md               # 本文件
 ```
@@ -143,10 +144,7 @@ PolyStrat 快速评审
 
 ### 深度评审
 
-详见 [POLYSTRAT_REVIEW.md](POLYSTRAT_REVIEW.md)，包含：
-- 6维度评分标准
-- 评审 Prompt 模板
-- 历史评审记录
+详见 [OPTIMIZATION.md](OPTIMIZATION.md)，包含完整的策略优化历史、修复记录和评审视角。
 
 ---
 
@@ -165,7 +163,7 @@ PolyStrat 快速评审
 
 ## 📈 性能优化
 
-- ✅ 新闻搜索并行化（6源同时请求）
+- ✅ 新闻搜索并行化（5源同时请求，SerpAPI 手动触发）
 - ✅ 文件缓存（1小时TTL，5550x 加速）
 - ✅ 动态权重调整（4信号自适应）
 - ✅ 自适应信号映射参数（基于准确率闭环）
