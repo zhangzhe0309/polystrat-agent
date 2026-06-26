@@ -1,0 +1,37 @@
+# Environment files
+*.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Secrets
+*.pem
+*.key
+*secret*
+*credential*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data files (may contain sensitive info)
+*.json
+!package.json
