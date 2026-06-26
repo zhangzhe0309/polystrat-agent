@@ -25,6 +25,12 @@ MAX_WEIGHT = 0.8  # 最大权重
 ROLLING_WINDOW_DAYS = 7  # 滚动窗口（天）
 
 
+def set_trade_log_path(path):
+    """允许外部覆盖交易记录文件路径（DRY_RUN/LIVE 切换）"""
+    global TRADE_LOG
+    TRADE_LOG = Path(path)
+
+
 def load_trade_history():
     """加载交易历史（使用安全文件操作）"""
     return atomic_read_json(TRADE_LOG, default=[])
