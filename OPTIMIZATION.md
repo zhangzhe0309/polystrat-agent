@@ -165,7 +165,8 @@
 | 第6轮 | 1 | 1 | 甜蜜点市场策略实施 |
 | 第7轮 | 2 | 3 | 市场微观结构信号（订单簿/价差/成交量） |
 | 第8轮 | 2 | 4 | ML特征工程扩展（5→15特征） |
-| **合计** | **12** | **39** | **核心逻辑缺陷全部修复 + 策略优化 + 信号增强 + ML优化** |
+| 第9轮 | 1 | 4 | 新闻源优化（RSS源扩展+解析优化） |
+| **合计** | **13** | **43** | **核心逻辑缺陷全部修复 + 策略优化 + 信号增强 + ML优化 + 新闻源优化** |
 
 ---
 
@@ -472,3 +473,83 @@ ml_signal = get_ml_signal(
 - 胜率提升 +5-10%（更多特征维度）
 - 模型泛化能力提升（避免过拟合）
 - 信号质量提升（多源数据融合）
+
+---
+
+## 第九轮优化 — 新闻源优化（1 文件，4 项修改）
+
+### 33. news_search.py — RSS 源列表扩展（5→9个）
+- **旧**：5个 RSS 源（1个搜索源 + 4个固定源）
+- **新**：9个 RSS 源（3个搜索源 + 4个固定源 + 2个Polymarket相关源）
+
+**新增 RSS 源（4个）**：
+- Bing News RSS（支持搜索，内容更相关）
+- Yahoo News RSS（支持搜索，内容更相关）
+- Polymarket Blog（Polymarket官方博客）
+- Prediction Market News（预测市场新闻）
+
+**RSS 源分类**：
+```python
+RSS_FEEDS = {
+    # 支持搜索的源（高优先级，内容更相关）
+    "google_news": "https://news.google.com/rss/search?q={query}...",
+    "bing_news": "https://www.bing.com/news/search?q={query}...",
+    "yahoo_news": "https://news.search.yahoo.com/rss?p={query}...",
+    # 固定源（低优先级，作为补充）
+    "bbc": "http://feeds.bbci.co.uk/news/rss.xml",
+    "reuters": "https://www.reutersagency.com/feed/",
+    "cnn": "http://rss.cnn.com/rss/edition.rss",
+    "cnbc": "https://search.cnbc.com/rs/search/combinedcms/view.xml...",
+    # Polymarket 相关源（新增）
+    "polymarket_blog": "https://blog.polymarket.com/rss/",
+    "prediction_market_news": "https://predictionmarketnews.com/feed/",
+}
+```
+
+### 34. news_search.py — RSS 解析函数优化
+- **旧**：简单解析，无质量过滤
+- **新**：优化解析，提升内容质量
+
+**优化点**：
+1. **内容质量过滤**：过滤掉太短或无意义的内容（标题 < 10字符）
+2. **内容清洗**：去除广告、无意义字符（Advertisement、Sponsored、Click here）
+3. **描述截断**：过长的描述截断到500字符
+4. **来源标识**：区分不同 RSS 源（Google News RSS、Bing News RSS、Polymarket Blog等）
+
+**函数签名**：
+```python
+def parse_rss_feed(rss_url, max_results=5, feed_name="rss"):
+    """
+    解析 RSS 订阅（优化版：提升内容质量）
+    """
+```
+
+### 35. news_search.py — search_rss 函数优化
+- **旧**：均匀分配配额
+- **新**：动态配额分配（搜索源优先）
+
+**优化点**：
+1. **分类统计**：区分搜索源和固定源
+2. **动态配额**：搜索源分配 2/3 配额，固定源分配 1/3 配额
+3. **来源标识**：传入 feed_name 参数
+
+**配额分配**：
+```python
+# 搜索源配额（优先）
+search_quota = max(2, max_results * 2 // 3)  # 2/3 配额给搜索源
+static_quota = max(1, max_results - search_quota)  # 1/3 配额给固定源
+```
+
+### 36. news_search.py — Polymarket 相关源新增
+- **新增**：Polymarket Blog RSS
+- **新增**：Prediction Market News RSS
+
+**目的**：
+- 获取 Polymarket 官方博客内容
+- 获取预测市场相关新闻
+- 提升 Polymarket 相关信息覆盖
+
+**预期效果**：
+- RSS 质量评分提升（从 0.60 提升到 0.75+）
+- 新闻相关性提升（支持搜索的源）
+- Polymarket 信息覆盖提升（专用源）

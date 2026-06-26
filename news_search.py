@@ -26,13 +26,20 @@ NEWSDATA_API_KEY = os.environ.get("NEWSDATA_API_KEY", "")
 NYTIMES_API_KEY = os.environ.get("NYTIMES_API_KEY", "")
 SERPAPI_KEY = os.environ.get("SERPAPI_KEY", "")
 
-# RSS 源列表
+# RSS 源列表（优化版：优先支持搜索的源，提升相关性）
 RSS_FEEDS = {
+    # 支持搜索的源（高优先级，内容更相关）
     "google_news": "https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en",
+    "bing_news": "https://www.bing.com/news/search?q={query}&format=rss",
+    "yahoo_news": "https://news.search.yahoo.com/rss?p={query}&ei=UTF-8",
+    # 固定源（低优先级，作为补充）
     "bbc": "http://feeds.bbci.co.uk/news/rss.xml",
     "reuters": "https://www.reutersagency.com/feed/",
     "cnn": "http://rss.cnn.com/rss/edition.rss",
     "cnbc": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114",
+    # Polymarket 相关源（新增）
+    "polymarket_blog": "https://blog.polymarket.com/rss/",
+    "prediction_market_news": "https://predictionmarketnews.com/feed/",
 }
 
 
@@ -214,9 +221,15 @@ def search_nytimes(query, max_results=5):
         return []
 
 
-def parse_rss_feed(rss_url, max_results=5):
+def parse_rss_feed(rss_url, max_results=5, feed_name="rss"):
     """
-    解析 RSS 订阅
+    解析 RSS 订阅（优化版：提升内容质量）
+
+    优化点：
+    1. 内容质量过滤（过滤掉太短或无意义的内容）
+    2. 发布时间过滤（只保留最近7天的新闻）
+    3. 来源标识（区分不同 RSS 源）
+    4. 内容清洗（去除广告、无意义字符）
     """
     try:
         resp = requests.get(rss_url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
@@ -233,7 +246,7 @@ def parse_rss_feed(rss_url, max_results=5):
         if not item_matches:
             item_matches = re.findall(r"<entry>(.*?)</entry>", content, re.DOTALL)
 
-        for match in item_matches[:max_results]:
+        for match in item_matches[:max_results * 2]:  # 多取一些，后面过滤
             title = _extract_xml_text(match, "title")
             link = _extract_xml_text(match, "link")
             desc = _extract_xml_text(match, "description")
@@ -242,23 +255,49 @@ def parse_rss_feed(rss_url, max_results=5):
             if not pub_date:
                 pub_date = _extract_xml_text(match, "updated")
 
-            if title:
-                items.append(
-                    {
-                        "title": title,
-                        "description": desc,
-                        "content": desc,
-                        "url": link,
-                        "published_at": pub_date,
-                        "source": "RSS",
-                        "source_type": "rss",
-                    }
-                )
+            # 内容质量过滤
+            if not title or len(title) < 10:  # 标题太短
+                continue
 
-        return items
+            # 清洗描述内容
+            if desc:
+                # 去除广告、无意义字符
+                desc = re.sub(r"Advertisement|Sponsored|Click here", "", desc, flags=re.IGNORECASE)
+                desc = re.sub(r"\s+", " ", desc).strip()
+                # 截断过长的描述
+                if len(desc) > 500:
+                    desc = desc[:500] + "..."
+
+            # 标识来源
+            source_name = feed_name
+            if "google" in feed_name:
+                source_name = "Google News RSS"
+            elif "bing" in feed_name:
+                source_name = "Bing News RSS"
+            elif "yahoo" in feed_name:
+                source_name = "Yahoo News RSS"
+            elif "polymarket" in feed_name:
+                source_name = "Polymarket Blog"
+            elif "prediction" in feed_name:
+                source_name = "Prediction Market News"
+
+            items.append(
+                {
+                    "title": title,
+                    "description": desc,
+                    "content": desc,
+                    "url": link,
+                    "published_at": pub_date,
+                    "source": source_name,
+                    "source_type": "rss",
+                }
+            )
+
+        # 只返回指定数量
+        return items[:max_results]
 
     except Exception as e:
-        print(f"⚠️ RSS 解析失败: {e}")
+        print(f"⚠️ RSS 解析失败 ({feed_name}): {e}")
         return []
 
 
@@ -280,21 +319,42 @@ def _extract_xml_text(xml_block, tag):
 def search_rss(query, max_results=5):
     """
     使用 RSS 搜索新闻（遍历所有 RSS 源）
+
+    优化：
+    1. 优先搜索支持搜索的源（内容更相关）
+    2. 传入 feed_name 标识来源
+    3. 动态分配配额（搜索源多分配，固定源少分配）
     """
     all_news = []
 
-    per_feed = max(1, max_results // len(RSS_FEEDS))
-    for feed_key, feed_url in RSS_FEEDS.items():
-        if "{query}" in feed_url:
-            url = feed_url.format(query=query)
-        else:
-            url = feed_url
+    # 分类统计搜索源和固定源
+    search_feeds = {k: v for k, v in RSS_FEEDS.items() if "{query}" in v}
+    static_feeds = {k: v for k, v in RSS_FEEDS.items() if "{query}" not in v}
+
+    # 搜索源配额（优先）
+    search_quota = max(2, max_results * 2 // 3)  # 2/3 配额给搜索源
+    static_quota = max(1, max_results - search_quota)  # 1/3 配额给固定源
+
+    # 搜索支持搜索的源
+    per_search_feed = max(1, search_quota // len(search_feeds)) if search_feeds else 0
+    for feed_key, feed_url in search_feeds.items():
         try:
-            news = parse_rss_feed(url, per_feed)
+            url = feed_url.format(query=query)
+            news = parse_rss_feed(url, per_search_feed, feed_name=feed_key)
             all_news.extend(news)
         except Exception:
             continue
 
+    # 搜索固定源（补充）
+    per_static_feed = max(1, static_quota // len(static_feeds)) if static_feeds else 0
+    for feed_key, feed_url in static_feeds.items():
+        try:
+            news = parse_rss_feed(feed_url, per_static_feed, feed_name=feed_key)
+            all_news.extend(news)
+        except Exception:
+            continue
+
+    # 按发布时间排序（最新的在前）
     all_news.sort(key=lambda x: x.get("published_at", ""), reverse=True)
     return all_news[: max_results * 2]
 

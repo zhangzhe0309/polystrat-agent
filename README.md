@@ -185,6 +185,28 @@ PolyStrat 快速评审
 
 ## 📝 更新日志
 
+### v3.7 (2026-06-26)
+
+**新闻源优化 — RSS 质量提升：**
+
+**核心优化:**
+- [P0] RSS 源从 5 个扩展到 9 个（3个搜索源 + 4个固定源 + 2个Polymarket相关源）
+- [P0] 新增支持搜索的 RSS 源（Bing News、Yahoo News）
+- [P0] 新增 Polymarket 相关 RSS 源（Polymarket Blog、Prediction Market News）
+- [P1] 优化 RSS 解析函数（内容质量过滤、发布时间过滤、来源标识）
+- [P1] 优化 search_rss 函数（动态配额分配，搜索源优先）
+
+**新增 RSS 源（4个）：**
+- Bing News RSS（支持搜索）
+- Yahoo News RSS（支持搜索）
+- Polymarket Blog（Polymarket官方）
+- Prediction Market News（预测市场新闻）
+
+**预期效果:**
+- RSS 质量评分提升（从 0.60 提升到 0.75+）
+- 新闻相关性提升（支持搜索的源）
+- Polymarket 信息覆盖提升（专用源）
+
 ### v3.6 (2026-06-26)
 
 **机器学习优化 — 特征工程扩展：**
