@@ -188,7 +188,7 @@ def scan_markets_v2(category=None, min_price=0.03, max_price=0.97, min_volume=10
             for m in markets:
                 prices = m.get("outcomePrices", "[0.5]")
                 try:
-                    price_list = eval(prices) if isinstance(prices, str) else prices
+                    price_list = json.loads(prices) if isinstance(prices, str) else prices
                     yes_price = float(price_list[0])
                 except:
                     continue

@@ -96,7 +96,7 @@ def calculate_signal_accuracy(trades, signal_type="llm", min_samples=3):
             rec = onchain.get("recommendation", "hold")
             if rec in ["buy", "strong_buy"]:
                 predicted = "win" if direction == "Yes" else "lose"
-            elif rec == "sell":
+            elif rec in ["sell", "strong_sell"]:
                 predicted = "win" if direction == "No" else "lose"
             else:
                 continue

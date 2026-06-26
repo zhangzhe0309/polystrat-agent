@@ -31,9 +31,11 @@ def calculate_win_rate(trades):
     if not trades:
         return 0
     
-    # 注意：DRY_RUN 模式下没有实际盈亏
-    # 这里返回模拟胜率
-    return 0.55  # 假设 55% 胜率
+    wins = sum(1 for t in trades if t.get("result") == "win")
+    settled = sum(1 for t in trades if t.get("result") in ("win", "lose"))
+    if settled == 0:
+        return 0
+    return wins / settled
 
 def calculate_profit_factor(trades):
     """
@@ -48,8 +50,19 @@ def calculate_profit_factor(trades):
     if not trades:
         return 0
     
-    # 模拟盈亏比
-    return 1.5  # 假设 1.5 盈亏比
+    gross_profit = 0.0
+    gross_loss = 0.0
+    for t in trades:
+        if t.get("result") == "win":
+            amount = t.get("amount", 0)
+            mp = t.get("market_price", 0.5)
+            if mp > 0:
+                gross_profit += amount * (1 - mp) / mp
+        elif t.get("result") == "lose":
+            gross_loss += t.get("amount", 0)
+    if gross_loss == 0:
+        return float("inf") if gross_profit > 0 else 0
+    return gross_profit / gross_loss
 
 def analyze_strategy_performance(trades):
     """
