@@ -36,6 +36,8 @@ class AdvancedVotingSystem:
         self.weights = {}
         if historical_accuracy:
             total_acc = sum(historical_accuracy.values())
+            if total_acc == 0:
+                total_acc = 1e-10  # 防零除
             for model in model_names:
                 self.weights[model] = historical_accuracy.get(model, 0.5) / total_acc
         else:
@@ -273,9 +275,9 @@ def calculate_historical_accuracy(trade_history):
             continue
 
         for result_str in model_results:
-            # 解析 "ModelName:XX¢" 格式
+            # 解析 "ModelName:XX¢" 格式（用 rsplit 防止模型名含冒号）
             if ":" in result_str:
-                parts = result_str.split(":")
+                parts = result_str.rsplit(":", 1)
                 model_name = parts[0].strip()
                 try:
                     prob = int(parts[1].replace("¢", "").strip()) / 100

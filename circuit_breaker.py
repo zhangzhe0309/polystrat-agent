@@ -165,12 +165,15 @@ class CircuitBreaker:
         log.warning(f"🚨 断路器触发: {reason}")
 
     def reset(self):
-        """手动重置断路器"""
+        """手动重置断路器（同时清除累计盈亏，防止重置后立即重新触发）"""
         self.state["status"] = "closed"
         self.state["consecutive_losses"] = 0
         self.state["open_since"] = None
+        self.state["total_pnl"] = 0.0
+        self.state["daily_pnl"] = 0.0
+        self.state["daily_reset_date"] = None
         self._save_state()
-        log.info("断路器已重置")
+        log.info("断路器已重置（含PnL清零）")
 
     def get_status(self):
         """获取状态"""

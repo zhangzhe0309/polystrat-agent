@@ -124,14 +124,14 @@ def calculate_llm_model_weights(trades=None, window_days=7):
         actual_is_win = actual_result == "win"
 
         for model_result in model_results:
-            if "|" in model_result:
-                parts = model_result.split("|")
-                if len(parts) >= 2:
-                    model_name = parts[0].strip()
-                    try:
-                        pred_prob = int(parts[1].replace("¢", "").strip()) / 100
-                    except:
-                        continue
+            # 与 polystrat_agent.py 一致：格式 "ModelName:XX¢"
+            if ":" in model_result:
+                parts = model_result.rsplit(":", 1)
+                model_name = parts[0].strip()
+                try:
+                    pred_prob = int(parts[1].replace("¢", "").strip()) / 100
+                except:
+                    continue
 
                     # 判断预测是否正确
                     predicted_win = pred_prob > 0.5

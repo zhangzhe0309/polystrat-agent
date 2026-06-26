@@ -1038,7 +1038,11 @@ def main():
                 decisions.append(decision)
                 continue
 
-            result = place_order(token_id, "BUY", position_size, order_price)
+            # Kelly 计算出的是美元金额，CLOB 需要代币数量（shares）
+            token_count = (
+                position_size / order_price if order_price > 0 else position_size
+            )
+            result = place_order(token_id, "BUY", round(token_count, 2), order_price)
             decision["order_result"] = result
 
             # 记录交易（包含 condition_id 用于去重，含信号数据用于自适应学习）
