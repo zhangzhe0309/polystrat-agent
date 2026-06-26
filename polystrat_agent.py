@@ -1015,6 +1015,20 @@ def main():
         # 先计算 edge 供 ML 使用（ML 需要 edge 作为特征）
         preliminary_edge = llm_prob - yes_price
         preliminary_direction = "Yes" if preliminary_edge > 0 else "No"
+
+        # 计算到期时间（天数）
+        end_date = market.get("end_date", "")
+        time_to_expiry = 0
+        if end_date:
+            try:
+                if "T" in end_date:
+                    dt = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+                else:
+                    dt = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                time_to_expiry = max(0, (dt - datetime.now(timezone.utc)).days)
+            except:
+                time_to_expiry = 0
+
         try:
             ml_signal = get_ml_signal(
                 llm_prob,
@@ -1022,6 +1036,12 @@ def main():
                 preliminary_edge,  # 使用真实 edge，而非 0
                 yes_price,
                 preliminary_direction,
+                onchain_signal=onchain_signal,
+                time_to_expiry=time_to_expiry,
+                category=category,
+                news_count=len(news_list),
+                vote_details=vote_details,
+                microstructure_signal=microstructure_signal,
             )
             ml_prob = ml_signal.get("ml_prob", 0.5)
             ml_confidence = ml_signal.get("confidence", 0.5)

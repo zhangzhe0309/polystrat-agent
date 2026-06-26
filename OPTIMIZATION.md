@@ -164,7 +164,8 @@
 | 第5轮 | 5 | 6 | eval安全漏洞/硬编码胜率盈亏比/strong_sell遗漏 |
 | 第6轮 | 1 | 1 | 甜蜜点市场策略实施 |
 | 第7轮 | 2 | 3 | 市场微观结构信号（订单簿/价差/成交量） |
-| **合计** | **11** | **35** | **核心逻辑缺陷全部修复 + 策略优化 + 信号增强** |
+| 第8轮 | 2 | 4 | ML特征工程扩展（5→15特征） |
+| **合计** | **12** | **39** | **核心逻辑缺陷全部修复 + 策略优化 + 信号增强 + ML优化** |
 
 ---
 
@@ -385,3 +386,89 @@ SIGNAL_WEIGHTS = {
 - 胜率提升 +8-12%（市场微观结构信号更独立）
 - 信号质量提升（订单簿深度、价差分析）
 - 风险控制优化（流动性监控）
+
+---
+
+## 第八轮优化 — ML 特征工程扩展（2 文件，4 项修改）
+
+### 29. ml_optimizer.py — 特征提取函数扩展（5→15特征）
+- **旧**：5个特征（llm_prob、sentiment_score、edge、market_price、direction）
+- **新**：15个特征（核心信号 + 链上信号 + 市场特征 + 新闻特征 + 投票特征 + 微观结构特征）
+
+**新增特征（10个）**：
+- 链上信号特征（3个）：置信度、买入推荐、卖出推荐
+- 市场特征（2个）：到期时间（归一化）、市场分类（编码）
+- 新闻特征（1个）：新闻源数量（归一化）
+- 投票特征（2个）：置信度、分歧度（归一化）
+- 微观结构特征（2个）：置信度、买入推荐
+
+**特征列表**：
+```python
+feature = [
+    # 核心信号特征（5个）
+    llm_prob, sentiment_score, abs(edge), market_price, direction,
+    # 链上信号特征（3个）
+    onchain_confidence, onchain_buy, onchain_sell,
+    # 市场特征（2个）
+    time_to_expiry_norm, category_encoded,
+    # 新闻特征（1个）
+    news_count_norm,
+    # 投票特征（2个）
+    vote_confidence, vote_disagreement,
+    # 微观结构特征（2个）
+    microstructure_confidence, microstructure_buy,
+]
+```
+
+### 30. ml_optimizer.py — get_ml_signal 函数扩展
+- **旧**：接收 5 个参数（llm_prob、sentiment_score、edge、market_price、direction）
+- **新**：接收 15 个参数（新增 onchain_signal、time_to_expiry、category、news_count、vote_details、microstructure_signal）
+
+**函数签名**：
+```python
+def get_ml_signal(llm_prob, sentiment_score, edge, market_price, direction,
+                   onchain_signal=None, time_to_expiry=0, category="Other",
+                   news_count=0, vote_details=None, microstructure_signal=None):
+```
+
+### 31. ml_optimizer.py — 特征重要性分析更新
+- **旧**：5个特征名称（LLM概率、情感分数、优势、市场价格、方向）
+- **新**：15个特征名称（完整列表）
+
+**特征名称列表**：
+```python
+feature_names = [
+    "LLM概率", "情感分数", "优势", "市场价格", "方向",
+    "链上置信度", "链上买入", "链上卖出",
+    "到期时间", "市场分类",
+    "新闻数量",
+    "投票置信度", "投票分歧度",
+    "微观置信度", "微观买入"
+]
+```
+
+### 32. polystrat_agent.py — 调用 get_ml_signal 更新
+- **旧**：传入 5 个参数
+- **新**：传入 15 个参数（包含链上信号、到期时间、市场分类、新闻数量、投票详情、微观结构信号）
+
+**调用示例**：
+```python
+ml_signal = get_ml_signal(
+    llm_prob,
+    sentiment_score,
+    preliminary_edge,
+    yes_price,
+    preliminary_direction,
+    onchain_signal=onchain_signal,
+    time_to_expiry=time_to_expiry,
+    category=category,
+    news_count=len(news_list),
+    vote_details=vote_details,
+    microstructure_signal=microstructure_signal,
+)
+```
+
+**预期效果**：
+- 胜率提升 +5-10%（更多特征维度）
+- 模型泛化能力提升（避免过拟合）
+- 信号质量提升（多源数据融合）
