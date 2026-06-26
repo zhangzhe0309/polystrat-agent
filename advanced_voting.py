@@ -217,22 +217,38 @@ class AdvancedVotingSystem:
         }
 
 
-def create_voting_system(trade_history=None):
+def create_voting_system(trade_history=None, model_weights=None):
     """
     创建投票系统实例
 
     Args:
         trade_history: 交易历史（用于计算历史准确率）
+        model_weights: 外部传入的模型权重 {model_name: weight}（优先级最高）
+                       dict 的 key 作为模型列表，避免硬编码
 
     Returns:
         AdvancedVotingSystem: 投票系统实例
     """
-    model_names = ["Qwen 3.5", "Kimi K2.6", "Llama 3.3 70B"]
-
-    # 从交易历史计算历史准确率
-    historical_accuracy = None
-    if trade_history:
+    # 优先使用外部传入的动态权重
+    if model_weights and isinstance(model_weights, dict):
+        model_names = list(model_weights.keys())
+        historical_accuracy = model_weights
+    elif trade_history:
+        model_names = [
+            "DeepSeek V4 Flash",
+            "Nemotron 3 Super",
+            "MiniMax M2.7",
+            "GLM-5.1",
+        ]
         historical_accuracy = calculate_historical_accuracy(trade_history)
+    else:
+        model_names = [
+            "DeepSeek V4 Flash",
+            "Nemotron 3 Super",
+            "MiniMax M2.7",
+            "GLM-5.1",
+        ]
+        historical_accuracy = None
 
     return AdvancedVotingSystem(model_names, historical_accuracy)
 
@@ -293,7 +309,12 @@ if __name__ == "__main__":
 
     # 测试1: 正常情况（模型一致）
     print("\n1. 正常情况（模型一致）:")
-    predictions = {"Qwen 3.5": 65, "Kimi K2.6": 60, "Llama 3.3 70B": 70}
+    predictions = {
+        "DeepSeek V4 Flash": 65,
+        "Nemotron 3 Super": 60,
+        "MiniMax M2.7": 70,
+        "GLM-5.1": 68,
+    }
     result = voting_system.vote(predictions)
     print(f"   最终预测: {result['final_prediction']:.2f}")
     print(f"   置信度: {result['confidence']:.2f}")
@@ -302,7 +323,12 @@ if __name__ == "__main__":
 
     # 测试2: 分歧大
     print("\n2. 分歧大:")
-    predictions = {"Qwen 3.5": 30, "Kimi K2.6": 60, "Llama 3.3 70B": 90}
+    predictions = {
+        "DeepSeek V4 Flash": 30,
+        "Nemotron 3 Super": 60,
+        "MiniMax M2.7": 90,
+        "GLM-5.1": 75,
+    }
     result = voting_system.vote(predictions)
     print(f"   最终预测: {result['final_prediction']:.2f}")
     print(f"   置信度: {result['confidence']:.2f}")
@@ -312,9 +338,10 @@ if __name__ == "__main__":
     # 测试3: 有异常值
     print("\n3. 有异常值:")
     predictions = {
-        "Qwen 3.5": 50,
-        "Kimi K2.6": 55,
-        "Llama 3.3 70B": 5,  # 异常低
+        "DeepSeek V4 Flash": 50,
+        "Nemotron 3 Super": 55,
+        "MiniMax M2.7": 5,  # 异常低
+        "GLM-5.1": 52,
     }
     result = voting_system.vote(predictions)
     print(f"   最终预测: {result['final_prediction']:.2f}")

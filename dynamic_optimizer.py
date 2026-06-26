@@ -25,7 +25,12 @@ OPTIMIZATION_CONFIG = Path("/root/.hermes/profiles/life/data/optimization_config
 
 # 默认配置
 DEFAULT_CONFIG = {
-    "llm_model_weights": {"Qwen 3.5": 0.35, "Kimi K2.6": 0.35, "Llama 3.3 70B": 0.30},
+    "llm_model_weights": {
+        "DeepSeek V4 Flash": 0.35,
+        "Nemotron 3 Super": 0.30,
+        "MiniMax M2.7": 0.20,
+        "GLM-5.1": 0.15,
+    },
     "news_source_scores": {
         "gnews": 0.7,
         "currents": 0.8,
