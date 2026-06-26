@@ -55,6 +55,7 @@ LLM_PROVIDERS = [
         "api_key": os.environ.get("NVIDIA_API_KEY_2", ""),
         "base_url": "https://integrate.api.nvidia.com/v1",
         "model": "deepseek-ai/deepseek-v4-flash",
+        "temperature": 0.3,
         "priority": 1,
     },
     {
@@ -62,6 +63,7 @@ LLM_PROVIDERS = [
         "api_key": os.environ.get("NVIDIA_API_KEY", ""),
         "base_url": "https://integrate.api.nvidia.com/v1",
         "model": "nvidia/nemotron-3-super-120b-a12b",
+        "temperature": 0.5,
         "priority": 2,
     },
     {
@@ -69,6 +71,7 @@ LLM_PROVIDERS = [
         "api_key": os.environ.get("NVIDIA_API_KEY_2", ""),
         "base_url": "https://integrate.api.nvidia.com/v1",
         "model": "minimaxai/minimax-m2.7",
+        "temperature": 0.5,
         "priority": 3,
     },
     {
@@ -76,6 +79,7 @@ LLM_PROVIDERS = [
         "api_key": os.environ.get("GLM_API_KEY", ""),
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
         "model": "glm-5.1",
+        "temperature": 0.4,
         "priority": 4,
     },
 ]
@@ -417,7 +421,7 @@ def llm_analyze_probability(
                         "model": provider["model"],
                         "messages": [{"role": "user", "content": prompt}],
                         "max_tokens": 10,
-                        "temperature": 0.1,
+                        "temperature": provider.get("temperature", 0.3),
                     },
                     timeout=20,
                 )
@@ -443,6 +447,7 @@ def llm_analyze_probability(
         # 获取 LLM 模型动态权重（基于历史准确率）
         try:
             from dynamic_optimizer import calculate_llm_model_weights
+
             model_weights = calculate_llm_model_weights()
         except Exception:
             model_weights = None
@@ -663,6 +668,19 @@ def main():
     trade_history = load_trade_history()
     adaptive_weights = calculate_adaptive_weights(trade_history)
 
+    # === 止损检查 ===
+    from risk_management import check_stop_loss as _check_stop_loss
+
+    stop_loss_result = _check_stop_loss(balance, trade_history)
+    if stop_loss_result["triggered"]:
+        log.warning(f"止损触发: {stop_loss_result['reason']}")
+        print(f"🛑 止损触发: {stop_loss_result['reason']}")
+        print(f"   累计回撤: {stop_loss_result['drawdown_pct']:.2%}")
+        # 仍继续分析市场，但不下单
+        STOP_LOSS_TRIGGERED = True
+    else:
+        STOP_LOSS_TRIGGERED = False
+
     # === 动态优化：LLM 模型权重 + 价格阈值 ===
     llm_model_weights = calculate_llm_model_weights(trade_history)
     dynamic_thresholds = get_dynamic_price_thresholds(trade_history)
@@ -785,7 +803,12 @@ def main():
                     news_list.append(n)
 
             news_sources = list(set(n.get("source_type", "unknown") for n in news_list))
-            news_text = "\n".join([n.get("title", "") for n in news_list[:3]])
+            news_text = "\n".join(
+                [
+                    f"标题: {n.get('title', '')}\n描述: {n.get('description', '')}"
+                    for n in news_list[:4]
+                ]
+            )
         except Exception as e:
             news_list = []
             news_sources = []
@@ -853,13 +876,16 @@ def main():
             log.warning(f"市场 '{title[:30]}' LLM投票分歧大，置信度低")
 
         # 7. ML 信号分析（在 LLM 分析之后，因为需要 llm_prob）
+        # 先计算 edge 供 ML 使用（ML 需要 edge 作为特征）
+        preliminary_edge = llm_prob - yes_price
+        preliminary_direction = "Yes" if preliminary_edge > 0 else "No"
         try:
             ml_signal = get_ml_signal(
                 llm_prob,
                 sentiment_score,
-                0,  # edge 在后面计算
+                preliminary_edge,  # 使用真实 edge，而非 0
                 yes_price,
-                "Yes" if llm_prob > yes_price else "No",
+                preliminary_direction,
             )
             ml_prob = ml_signal.get("ml_prob", 0.5)
             ml_confidence = ml_signal.get("confidence", 0.5)
@@ -897,6 +923,7 @@ def main():
             onchain_signal_prob = 0.5 - 0.15 * onchain_confidence_val * onchain_mult
         else:
             onchain_signal_prob = 0.5
+        onchain_signal_prob = max(0.01, min(0.99, onchain_signal_prob))  # 边界保护
 
         # 信号4: ML 概率（已经是概率，直接使用）
         ml_signal_prob = ml_prob
@@ -924,12 +951,16 @@ def main():
 
         if edge > 0:
             direction = "Yes"
-            token_id = market["yes_token"]
+            token_id = market.get("yes_token", "")
             order_price = yes_price
         else:
             direction = "No"
-            token_id = market["no_token"]
-            order_price = market["no_price"]
+            token_id = market.get("no_token", "")
+            order_price = market.get("no_price", 1 - yes_price)
+
+        # 跳过无 token_id 的市场
+        if not token_id:
+            continue
 
         # 7. 风险检查（使用投票置信度，而非情感置信度）
         voting_confidence = vote_details.get("confidence", sentiment_confidence)
@@ -963,6 +994,7 @@ def main():
             and trades_made < MAX_TRADES_PER_RUN
             and token_id
             and should_trade_flag
+            and not STOP_LOSS_TRIGGERED
         ):
             # 检查断路器
             if not check_breaker():
@@ -1089,12 +1121,19 @@ def main():
     except Exception as e:
         log_error("main", e, "交易限额状态获取失败")
 
+    # 输出止损状态
+    if STOP_LOSS_TRIGGERED:
+        print(
+            f"\n🛑 止损已触发：累计回撤 {stop_loss_result['drawdown_pct']:.2%}，暂停新交易"
+        )
+    else:
+        print(f"\n✅ 止损状态：正常（累计回撤 {stop_loss_result['drawdown_pct']:.2%}）")
+
     # 输出动态优化报告
     try:
         print(format_optimization_report())
     except Exception as e:
         print(f"⚠️ 优化报告生成失败: {e}")
-        print(output)
 
 
 if __name__ == "__main__":
