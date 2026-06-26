@@ -257,7 +257,12 @@ def create_voting_system(trade_history=None, model_weights=None):
 
 def calculate_historical_accuracy(trade_history):
     """
-    从交易历史计算各模型准确率
+    从交易历史计算各模型准确率（方向感知）
+
+    准确率评判逻辑：
+    - Yes 方向交易：模型概率 > 市场价 → 预测赢
+    - No 方向交易：模型概率 < 市场价 → 预测赢
+    （模型概率高于市场价意味着模型认为 Yes 更可能，支持 Yes 方向）
 
     Args:
         trade_history: 交易历史列表
@@ -270,6 +275,8 @@ def calculate_historical_accuracy(trade_history):
     for trade in trade_history:
         model_results = trade.get("model_results", [])
         actual_result = trade.get("result", "")
+        direction = trade.get("direction", "Yes")
+        market_price = trade.get("market_price", 0.5)
 
         if actual_result not in ("win", "lose"):
             continue
@@ -284,11 +291,18 @@ def calculate_historical_accuracy(trade_history):
                 except:
                     continue
 
-                # 判断预测是否正确
-                predicted_win = prob > 0.5
-                actual_win = actual_result == "win"
+                # 方向感知判断：模型预测是否支持交易方向
+                if direction == "Yes":
+                    # Yes 方向：模型概率 > 市场价 → 模型支持该交易方向
+                    predicted_correct = prob > market_price
+                elif direction == "No":
+                    # No 方向：模型概率 < 市场价 → 模型支持该交易方向
+                    predicted_correct = prob < market_price
+                else:
+                    continue
 
-                if predicted_win == actual_win:
+                actual_win = actual_result == "win"
+                if predicted_correct == actual_win:
                     model_stats[model_name]["correct"] += 1
                 model_stats[model_name]["total"] += 1
 

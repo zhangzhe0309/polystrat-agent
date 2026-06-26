@@ -130,14 +130,14 @@ def calculate_llm_model_weights(trades=None, window_days=7):
                 model_name = parts[0].strip()
                 try:
                     pred_prob = int(parts[1].replace("¢", "").strip()) / 100
-                except:
+                except Exception:
                     continue
 
-                    # 判断预测是否正确
-                    predicted_win = pred_prob > 0.5
-                    if predicted_win == actual_is_win:
-                        model_stats[model_name]["correct"] += 1
-                    model_stats[model_name]["total"] += 1
+                # 判断预测是否正确
+                predicted_win = pred_prob > 0.5
+                if predicted_win == actual_is_win:
+                    model_stats[model_name]["correct"] += 1
+                model_stats[model_name]["total"] += 1
 
     # 计算新权重
     new_weights = {}

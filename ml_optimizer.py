@@ -437,7 +437,7 @@ if __name__ == "__main__":
             print(f"   {name}: {importance:.4f}")
 
     print(f"\n3. ML 信号测试:")
-    signal = get_ml_signal(0.6, 0.3, 0.1, 0.5, "Yes", 2.0)
+    signal = get_ml_signal(0.6, 0.3, 0.1, 0.5, "Yes")
     print(f"   ML 概率: {signal['ml_prob']:.2f}")
     print(f"   使用模型: {signal['models_used']} 个")
     print(f"   建议: {signal['recommendation']}")

@@ -525,10 +525,18 @@ def save_trade(trade_info):
     append_to_json_array(TRADE_LOG, trade_info)
 
 
-def format_output(decisions):
-    """格式化输出结果"""
+def format_output(decisions, edge_threshold=None):
+    """格式化输出结果
+
+    Args:
+        decisions: 决策列表
+        edge_threshold: 动态优势阈值（来自自适应权重），默认使用全局 EDGE_THRESHOLD
+    """
     if not decisions:
         return ""  # 静默
+
+    # 使用动态阈值，回退到全局默认值
+    effective_threshold = edge_threshold if edge_threshold is not None else EDGE_THRESHOLD
 
     lines = []
     lines.append("🤖 PolyStrat AI 分析报告")
@@ -543,10 +551,10 @@ def format_output(decisions):
         market = d["market"]
         category = market.get("category", "")
 
-        # 显示所有分析过的市场
+        # 显示所有分析过的市场（使用动态阈值）
         emoji = (
             "🟢"
-            if abs(edge) >= EDGE_THRESHOLD and trades_made < MAX_TRADES_PER_RUN
+            if abs(edge) >= effective_threshold and trades_made < MAX_TRADES_PER_RUN
             else "⚪"
         )
         cat_emoji = {
@@ -630,7 +638,7 @@ def format_output(decisions):
             except Exception:
                 pass
 
-        if abs(edge) >= EDGE_THRESHOLD and trades_made < MAX_TRADES_PER_RUN:
+        if abs(edge) >= effective_threshold and trades_made < MAX_TRADES_PER_RUN:
             result = d.get("order_result")
             if result:
                 status = result.get("status", "")
@@ -958,9 +966,12 @@ def main():
         if ml_confidence <= 0.5 and ml_prob == 0.5:
             signal_fallbacks += 1  # ML 信号无有效数据
 
-        # 信号5: 多平台/套利信号（有套利机会 → 置信度加成）
-        if has_arbitrage:
-            arbitrage_signal = 0.5 + min(0.2, len(arbitrage_opportunities) * 0.03)
+        # 信号5: 多平台/套利信号（方向感知：套利信号不偏向 Yes 或 No）
+        # 套利本身是价格差异，不改变事件概率判断，仅作为置信度加成
+        if has_arbitrage and arbitrage_opportunities:
+            # 套利机会的存在增强了对当前市场定价的置信度
+            # 但不改变方向判断 → 回归 0.5（中性），加成体现在权重而非偏移
+            arbitrage_signal = 0.5
         else:
             arbitrage_signal = 0.5
 
@@ -1036,7 +1047,7 @@ def main():
                 breaker_ok = check_breaker()
             except Exception as e:
                 log_error("breaker", e, "断路器检查失败")
-                breaker_ok = True  # 断路器异常时允许交易（fail-open）
+                breaker_ok = False  # 断路器异常时禁止交易（fail-closed，保护资金安全）
             if not breaker_ok:
                 log.warning("断路器已断开，跳过交易")
                 decision["order_result"] = {"status": "BLOCKED", "reason": "断路器断开"}
@@ -1135,8 +1146,8 @@ def main():
         # 避免 API 限流
         time.sleep(1)
 
-    # 9. 输出结果
-    output = format_output(decisions)
+    # 9. 输出结果（传入动态阈值，确保显示与实际交易一致）
+    output = format_output(decisions, edge_threshold=edge_threshold)
     if output:
         print(output)
 

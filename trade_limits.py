@@ -121,17 +121,14 @@ class TradeLimiter:
         if balance is not None:
             if balance < LIMITS_CONFIG["min_balance_required"]:
                 return False, f"余额不足 ${LIMITS_CONFIG['min_balance_required']:.2f}"
-            if amount > balance * LIMITS_CONFIG["max_position_pct"]:
-                return (
-                    False,
-                    f"超过单笔仓位比例 {LIMITS_CONFIG['max_position_pct']:.0%}",
-                )
-            # 检查累计仓位（含本次）是否超额
+            # 检查累计仓位（含本次）是否超过余额比例限制
+            # 此检查已包含单笔限制（因为 new_total >= amount）
             new_total = self.state["total_exposure"] + amount
-            if new_total > balance * LIMITS_CONFIG["max_position_pct"]:
+            max_by_pct = balance * LIMITS_CONFIG["max_position_pct"]
+            if new_total > max_by_pct:
                 return (
                     False,
-                    f"累计仓位 {new_total:.2f} 超限 {balance * LIMITS_CONFIG['max_position_pct']:.2f}",
+                    f"累计仓位 ${new_total:.2f} 超过余额{LIMITS_CONFIG['max_position_pct']:.0%}限制 (${max_by_pct:.2f})",
                 )
 
         return True, "允许交易"
