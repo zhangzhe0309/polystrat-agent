@@ -9,6 +9,7 @@
 import requests
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -151,15 +152,18 @@ def analyze_volume_change(market_slug, hours=24):
     """
     分析交易量变化（基于 Gamma API + 本地快照缓存）
 
+    Gamma API 返回的是累计交易量，两次快照之差 = 区间交易量。
+
     工作方式：
     - 读取上次运行保存的 volume 快照
+    - 检查快照时效性是否在 hours 窗口内
     - 对比当前 volume 计算变化率
     - 保存当前 volume 供下次对比
     - 首次运行无快照时：用 volume/liquidity 比率作代理
 
     Args:
         market_slug: 市场 slug
-        hours: 时间范围（小时）
+        hours: 时间范围（小时），仅用于校验快照时效性
 
     Returns:
         dict: 交易量变化分析
@@ -169,13 +173,41 @@ def analyze_volume_change(market_slug, hours=24):
     current_liquidity = volume_data.get("liquidity", 0)
 
     previous = _load_volume_snapshot(market_slug)
+    change = 0.0
+    trend = "stable"
+    confidence = 0.1
 
     if previous and previous.get("volume", 0) > 0:
         old_volume = previous["volume"]
+        old_ts = previous.get("timestamp", "")
+        # 校验快照时效性
+        snap_hours_ago = None
+        if old_ts:
+            try:
+                snap_time = datetime.fromisoformat(old_ts.replace("Z", "+00:00"))
+                snap_hours_ago = (
+                    datetime.now(timezone.utc) - snap_time
+                ).total_seconds() / 3600
+            except Exception:
+                pass
+        # 快照太新（< 0.5h）或太旧（> 2×hours）都降低置信度
+        time_ok = True
+        if snap_hours_ago is not None:
+            if snap_hours_ago < 0.5:
+                confidence = 0.15
+                time_ok = False
+            elif snap_hours_ago > hours * 2:
+                confidence = 0.2
+                time_ok = False
+
         if old_volume > 0:
             change = (current_volume - old_volume) / old_volume
+            # 累计量不可能下降（除非快照问题），若下降视为 0
+            if change < 0:
+                change = 0
         else:
             change = 0
+
         trend = (
             "increasing"
             if change > 0.05
@@ -183,12 +215,11 @@ def analyze_volume_change(market_slug, hours=24):
             if change < -0.05
             else "stable"
         )
-        confidence = min(0.8, 0.4 + abs(change))
+        if time_ok:
+            confidence = min(0.8, 0.4 + abs(change))
     else:
         # 无历史快照：无法计算变化，返回 0 和低置信度
-        change = 0
-        trend = "stable"
-        confidence = 0.1
+        pass
 
     _save_volume_snapshot(market_slug, current_volume, current_liquidity)
 
@@ -219,13 +250,20 @@ def get_market_momentum(market_title):
         if resp.status_code == 200:
             markets = resp.json()
 
-            # 找到匹配的市场
+            # 找到匹配的市场（使用单词边界，防子字符串误匹配）
             target_market = None
+            title_lower = market_title.lower()
+            title_words = set(re.findall(r"\w+", title_lower))
             for market in markets:
                 question = market.get("question", "").lower()
-                if market_title.lower() in question or question in market_title.lower():
-                    target_market = market
-                    break
+                q_words = set(re.findall(r"\w+", question))
+                # 至少匹配 60% 的单词
+                if title_words and q_words:
+                    overlap = title_words & q_words
+                    ratio = len(overlap) / max(len(title_words), len(q_words))
+                    if ratio >= 0.6:
+                        target_market = market
+                        break
 
             if target_market:
                 slug = target_market.get("slug", "")

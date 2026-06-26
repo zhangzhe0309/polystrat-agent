@@ -46,6 +46,11 @@ from trade_limits import (
     get_limits_status,
     LIMITS_CONFIG,
 )
+from settlement_tracker import (
+    update_settled_trades,
+    format_settlement_report as fmt_settlement_report,
+)
+from settlement_tracker import set_trade_log_path as set_settlement_log_path
 
 # === 配置 ===
 # LLM Ensemble 链：多模型投票 + 多 API Key 容错
@@ -120,7 +125,11 @@ CLOB_API = "https://clob.polymarket.com"
 # 日志目录
 LOG_DIR = Path("/root/.hermes/profiles/life/home/.hermes/polymarket_bot/logs")
 LOG_DIR.mkdir(parents=True, exist_ok=True)
-TRADE_LOG = LOG_DIR / "polystrat_trades.json"
+TRADE_LOG = (
+    LOG_DIR / "polystrat_trades_dryrun.json"
+    if DRY_RUN
+    else LOG_DIR / "polystrat_trades.json"
+)
 
 
 def fetch_active_markets(limit=20):
@@ -653,6 +662,17 @@ def main():
     log.info("=" * 50)
     log.info("PolyStrat 启动")
 
+    # === 结算同步（先更新交易结果，让 ML 学习有目标变量）===
+    try:
+        set_settlement_log_path(TRADE_LOG)
+        settle_stats = update_settled_trades()
+        if settle_stats.get("updated", 0) > 0 or settle_stats.get("timeout", 0) > 0:
+            log.info(
+                f"结算同步: {settle_stats['wins']}胜/{settle_stats['losses']}负, PnL {settle_stats.get('total_pnl', 0):+.2f}"
+            )
+    except Exception as e:
+        log_error("settlement", e, "结算同步失败（非致命）")
+
     # 1. 获取活跃市场（取前10个，减少处理时间）
     markets = fetch_active_markets(limit=10)
     if not markets:
@@ -903,14 +923,20 @@ def main():
         # 所有信号统一为概率格式 (0-1)
         # 权重来自自适应权重模块（基于历史胜率动态调整）
 
+        # 追踪哪些信号是真实值 vs 回退值
+        signal_fallbacks = 0
+
         # 信号1: LLM 概率（已经是概率，直接使用）
         llm_signal_prob = llm_prob
+        # LLM 失败时 llm_prob 为 None → continue，不会到这里
 
         # 信号2: 情感概率（将 sentiment_score 转换为概率）
         # 使用自适应映射斜率（基于情感信号历史准确率）
         sentiment_mapping_slope = adaptive_weights.get("sentiment_mapping_slope", 0.35)
         sentiment_signal_prob = 0.5 + sentiment_score * sentiment_mapping_slope
         sentiment_signal_prob = max(0.15, min(0.85, sentiment_signal_prob))
+        if sentiment_score == 0 and sentiment_confidence == 0:
+            signal_fallbacks += 1  # 情感信号完全回退
 
         # 信号3: 链上概率（连续映射，纳入置信度 × 自适应乘数）
         onchain_confidence_val = onchain_signal.get("confidence", 0.3)
@@ -923,10 +949,14 @@ def main():
             onchain_signal_prob = 0.5 - 0.15 * onchain_confidence_val * onchain_mult
         else:
             onchain_signal_prob = 0.5
+            if onchain_recommendation == "hold" and onchain_confidence_val <= 0.3:
+                signal_fallbacks += 1  # 链上信号无有效数据
         onchain_signal_prob = max(0.01, min(0.99, onchain_signal_prob))  # 边界保护
 
         # 信号4: ML 概率（已经是概率，直接使用）
         ml_signal_prob = ml_prob
+        if ml_confidence <= 0.5 and ml_prob == 0.5:
+            signal_fallbacks += 1  # ML 信号无有效数据
 
         # 信号5: 多平台/套利信号（有套利机会 → 置信度加成）
         if has_arbitrage:
@@ -945,6 +975,11 @@ def main():
 
         # 边界检查
         final_prob = max(0.01, min(0.99, final_prob))  # 防止极端值
+
+        # 信号质量检查：超过 2 个信号回退时跳过该市场（防噪声交易）
+        if signal_fallbacks >= 2:
+            print(f"⏭️ 跳过 {title[:40]}... ({signal_fallbacks}/4 信号回退)")
+            continue
 
         # 8. 计算优势
         edge = final_prob - yes_price
@@ -997,7 +1032,12 @@ def main():
             and not STOP_LOSS_TRIGGERED
         ):
             # 检查断路器
-            if not check_breaker():
+            try:
+                breaker_ok = check_breaker()
+            except Exception as e:
+                log_error("breaker", e, "断路器检查失败")
+                breaker_ok = True  # 断路器异常时允许交易（fail-open）
+            if not breaker_ok:
                 log.warning("断路器已断开，跳过交易")
                 decision["order_result"] = {"status": "BLOCKED", "reason": "断路器断开"}
                 decisions.append(decision)
@@ -1028,7 +1068,19 @@ def main():
                 balance * 0.05,
                 LIMITS_CONFIG["max_single_trade"],
             )
-            position_size = round(max(0.5, position_size), 2)
+            # Polymarket 最小下单量 $0.50，若 Kelly 建议低于此值则跳过（边缘优势不足）
+            MIN_ORDER = 0.50
+            if position_size < MIN_ORDER:
+                log.warning(
+                    f"Kelly仓位 ${position_size:.2f} 低于最小下单额 ${MIN_ORDER}，跳过"
+                )
+                decision["order_result"] = {
+                    "status": "SKIPPED",
+                    "reason": f"Kelly仓位 ${position_size:.2f} < 最小${MIN_ORDER}",
+                }
+                decisions.append(decision)
+                continue
+            position_size = round(position_size, 2)
 
             # 检查交易限额
             allowed, limit_reason = check_trade_allowed(position_size, balance)

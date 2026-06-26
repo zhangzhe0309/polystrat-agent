@@ -10,7 +10,10 @@ import os
 import requests
 import json
 import re
+import html
+import tempfile
 from datetime import datetime
+from pathlib import Path
 from dotenv import load_dotenv
 
 # 加载 .env 文件
@@ -173,7 +176,7 @@ def search_nytimes(query, max_results=5):
             "q": query,
             "api-key": NYTIMES_API_KEY,
             "fl": "headline,pub_date,web_url,snippet",
-            "page": 1,
+            "page": 0,
         }
 
         resp = requests.get(url, params=params, timeout=10)
@@ -216,42 +219,28 @@ def parse_rss_feed(rss_url, max_results=5):
     解析 RSS 订阅
     """
     try:
-        resp = requests.get(rss_url, timeout=10)
+        resp = requests.get(rss_url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
 
         if resp.status_code != 200:
             return []
 
         content = resp.text
 
-        # 简单的 XML 解析（不依赖外部库）
         items = []
 
-        # 提取 <item> 标签
-        item_pattern = r"<item>(.*?)</item>"
-        matches = re.findall(item_pattern, content, re.DOTALL)
+        # 提取 <item> 标签（兼容 <entry> 用于 Atom feed）
+        item_matches = re.findall(r"<item>(.*?)</item>", content, re.DOTALL)
+        if not item_matches:
+            item_matches = re.findall(r"<entry>(.*?)</entry>", content, re.DOTALL)
 
-        for match in matches[:max_results]:
-            # 提取标题
-            title_match = re.search(r"<title>(.*?)</title>", match, re.DOTALL)
-            title = title_match.group(1).strip() if title_match else ""
+        for match in item_matches[:max_results]:
+            title = _extract_xml_text(match, "title")
+            link = _extract_xml_text(match, "link")
+            desc = _extract_xml_text(match, "description")
+            pub_date = _extract_xml_text(match, "pubDate")
 
-            # 提取链接
-            link_match = re.search(r"<link>(.*?)</link>", match, re.DOTALL)
-            link = link_match.group(1).strip() if link_match else ""
-
-            # 提取描述
-            desc_match = re.search(
-                r"<description>(.*?)</description>", match, re.DOTALL
-            )
-            desc = desc_match.group(1).strip() if desc_match else ""
-
-            # 提取发布时间
-            pub_match = re.search(r"<pubDate>(.*?)</pubDate>", match, re.DOTALL)
-            pub_date = pub_match.group(1).strip() if pub_match else ""
-
-            # 清理 HTML 标签
-            title = re.sub(r"<[^>]+>", "", title).strip()
-            desc = re.sub(r"<[^>]+>", "", desc).strip()
+            if not pub_date:
+                pub_date = _extract_xml_text(match, "updated")
 
             if title:
                 items.append(
@@ -273,18 +262,41 @@ def parse_rss_feed(rss_url, max_results=5):
         return []
 
 
+def _extract_xml_text(xml_block, tag):
+    """从 XML 块提取指定标签的文本内容，处理 CDATA 和 HTML 实体"""
+    match = re.search(rf"<{tag}[^>]*>(.*?)</{tag}>", xml_block, re.DOTALL)
+    if not match:
+        return ""
+    text = match.group(1).strip()
+    # 剥离 CDATA 标记
+    text = re.sub(r"<!\[CDATA\[(.*?)\]\]>", r"\1", text, flags=re.DOTALL)
+    # 清理残留的 HTML 标签
+    text = re.sub(r"<[^>]+>", "", text).strip()
+    # 解码 HTML 实体
+    text = html.unescape(text)
+    return text
+
+
 def search_rss(query, max_results=5):
     """
-    使用 RSS 搜索新闻
+    使用 RSS 搜索新闻（遍历所有 RSS 源）
     """
     all_news = []
 
-    # 使用 Google News RSS
-    rss_url = RSS_FEEDS["google_news"].format(query=query)
-    news = parse_rss_feed(rss_url, max_results)
-    all_news.extend(news)
+    per_feed = max(1, max_results // len(RSS_FEEDS))
+    for feed_key, feed_url in RSS_FEEDS.items():
+        if "{query}" in feed_url:
+            url = feed_url.format(query=query)
+        else:
+            url = feed_url
+        try:
+            news = parse_rss_feed(url, per_feed)
+            all_news.extend(news)
+        except Exception:
+            continue
 
-    return all_news[:max_results]
+    all_news.sort(key=lambda x: x.get("published_at", ""), reverse=True)
+    return all_news[: max_results * 2]
 
 
 def _serpapi_available():
@@ -317,8 +329,8 @@ def search_news_for_market(market_title, max_results=5, use_cache=True):
     from datetime import datetime, timezone, timedelta
     from pathlib import Path
 
-    # 提取关键词
-    keywords = market_title.replace("?", "").replace("before GTA VI", "").strip()[:60]
+    # 提取关键词：移除问号和括号内的额外信息（如 "before GTA VI" 类描述）
+    keywords = re.sub(r"\(.*?\)", "", market_title).replace("?", "").strip()[:60]
 
     # === 缓存机制 ===
     cache_dir = Path("/root/.hermes/profiles/life/data/news_cache")
@@ -355,7 +367,8 @@ def search_news_for_market(market_title, max_results=5, use_cache=True):
     ]
 
     # 并行执行（最多4线程，避免API限流）
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    executor = ThreadPoolExecutor(max_workers=4)
+    try:
         futures = {executor.submit(task): name for name, task in search_tasks}
         for future in as_completed(futures, timeout=20):
             try:
@@ -364,6 +377,9 @@ def search_news_for_market(market_title, max_results=5, use_cache=True):
                     all_news.extend(result)
             except Exception:
                 pass
+    finally:
+        # 防止挂起线程阻塞主流程（wait=False 不等待，cancel_futures 取消未完成）
+        executor.shutdown(wait=False, cancel_futures=True)
 
     # 去重（按标题）
     seen_titles = set()
@@ -401,16 +417,21 @@ def search_news_for_market(market_title, max_results=5, use_cache=True):
 
     final_results = final_results[: max_results * 2]
 
-    # 写入缓存
+    # 写入缓存（原子写入：tmp + rename 防竞态）
     try:
         cache_data = {
             "keywords": keywords,
             "cached_at": datetime.now(timezone.utc).isoformat(),
             "news": final_results,
         }
-        cache_file.write_text(json.dumps(cache_data, ensure_ascii=False))
+        tmp = cache_file.with_suffix(f".tmp.{os.getpid()}")
+        tmp.write_text(json.dumps(cache_data, ensure_ascii=False))
+        tmp.rename(cache_file)
     except Exception:
-        pass
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
 
     return final_results
 
