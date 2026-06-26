@@ -20,13 +20,18 @@ import requests
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+# 加载 .env 文件（Hermes profile 环境变量）
+from dotenv import load_dotenv
+load_dotenv(Path.home() / ".hermes" / "profiles" / "life" / ".env")
+load_dotenv()  # 也加载项目目录的 .env（如果有）
+
 # 导入自定义模块
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from news_search import search_news_for_market
 from sentiment_analysis import analyze_news_sentiment, analyze_sentiment_simple
-from risk_management import should_trade, calculate_position_size, get_risk_report
+from risk_management import should_trade, calculate_position_size, get_risk_report, set_trade_log_path as set_risk_log_path
 from onchain_monitor import get_onchain_signal
-from adaptive_weights import calculate_adaptive_weights, load_trade_history
+from adaptive_weights import calculate_adaptive_weights, load_trade_history, set_trade_log_path as set_adaptive_log_path
 from ml_optimizer import get_ml_signal
 from multi_platform import get_multiplatform_signal
 from smart_keywords import get_search_queries
@@ -53,15 +58,18 @@ from settlement_tracker import (
 from settlement_tracker import set_trade_log_path as set_settlement_log_path
 
 # === 配置 ===
-# LLM Ensemble 链：多模型投票 + 多 API Key 容错
+# LLM Ensemble 链：双主力(reasoning) + 双辅助(快速验证)
+# Primary: MiniMax M2.7 + Nemotron 3 Super (reasoning模型，输出完整推理链)
+# Secondary: Llama 3.3 70B + GLM-5.1 (快速方向验证)
 LLM_PROVIDERS = [
     {
-        "name": "DeepSeek V4 Flash",
+        "name": "MiniMax M2.7",
         "api_key": os.environ.get("NVIDIA_API_KEY_2", ""),
         "base_url": "https://integrate.api.nvidia.com/v1",
-        "model": "deepseek-ai/deepseek-v4-flash",
-        "temperature": 0.3,
+        "model": "minimaxai/minimax-m2.7",
+        "temperature": 0.5,
         "priority": 1,
+        "role": "primary",
     },
     {
         "name": "Nemotron 3 Super",
@@ -70,14 +78,16 @@ LLM_PROVIDERS = [
         "model": "nvidia/nemotron-3-super-120b-a12b",
         "temperature": 0.5,
         "priority": 2,
+        "role": "primary",
     },
     {
-        "name": "MiniMax M2.7",
-        "api_key": os.environ.get("NVIDIA_API_KEY_2", ""),
+        "name": "Llama 3.3 70B",
+        "api_key": os.environ.get("NVIDIA_API_KEY", ""),
         "base_url": "https://integrate.api.nvidia.com/v1",
-        "model": "minimaxai/minimax-m2.7",
-        "temperature": 0.5,
+        "model": "meta/llama-3.3-70b-instruct",
+        "temperature": 0.3,
         "priority": 3,
+        "role": "secondary",
     },
     {
         "name": "GLM-5.1",
@@ -86,8 +96,12 @@ LLM_PROVIDERS = [
         "model": "glm-5.1",
         "temperature": 0.4,
         "priority": 4,
+        "role": "secondary",
     },
 ]
+
+# 最少有效投票数（至少2票才认为分析有效）
+MIN_VALID_VOTES = 2
 
 # 按优先级排序
 LLM_PROVIDERS.sort(key=lambda x: x.get("priority", 99))
@@ -131,8 +145,13 @@ TRADE_LOG = (
     else LOG_DIR / "polystrat_trades.json"
 )
 
+# 同步交易日志路径到子模块（DRY_RUN/LIVE 一致性）
+set_adaptive_log_path(TRADE_LOG)
+set_settlement_log_path(TRADE_LOG)
+set_risk_log_path(TRADE_LOG)
 
-def fetch_active_markets(limit=20):
+
+def fetch_active_markets(limit=50):
     """从 Gamma API 获取活跃市场，按流动性排序"""
     try:
         resp = requests.get(
@@ -141,6 +160,8 @@ def fetch_active_markets(limit=20):
                 "closed": "false",
                 "limit": limit,
                 "active": "true",
+                "order": "liquidityNum",
+                "ascending": "false",
             },
             timeout=30,
         )
@@ -429,15 +450,19 @@ def llm_analyze_probability(
                     json={
                         "model": provider["model"],
                         "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": 10,
+                        "max_tokens": 1000,
                         "temperature": provider.get("temperature", 0.3),
                     },
-                    timeout=20,
+                    timeout=45,
                 )
                 if resp.status_code == 429:
                     break  # 限流，跳到下一个 provider
                 resp.raise_for_status()
-                content = resp.json()["choices"][0]["message"]["content"].strip()
+                msg = resp.json()["choices"][0]["message"]
+                # 兼容推理模型：content 可能在 reasoning_content 中
+                content = (msg.get("content") or "").strip()
+                if not content:
+                    content = (msg.get("reasoning_content") or "").strip()
                 match = re.search(r"(\d+)", content)
                 if match:
                     prob = int(match.group(1))
@@ -463,6 +488,12 @@ def llm_analyze_probability(
 
         voting_system = create_voting_system(model_weights=model_weights)
         vote_result = voting_system.vote(predictions_dict)
+
+        # 最少投票数检查
+        n_votes = len(predictions_dict)
+        if n_votes < MIN_VALID_VOTES:
+            log.warning(f"LLM投票不足: {n_votes}/{MIN_VALID_VOTES} 票，跳过该市场")
+            return None, model_results, {"confidence": 0, "disagreement": 100, "need_review": True}
 
         avg = vote_result["final_prediction"] / 100.0
         confidence = vote_result["confidence"]
@@ -681,8 +712,8 @@ def main():
     except Exception as e:
         log_error("settlement", e, "结算同步失败（非致命）")
 
-    # 1. 获取活跃市场（取前10个，减少处理时间）
-    markets = fetch_active_markets(limit=10)
+    # 1. 获取活跃市场（按流动性排序取前50，覆盖更多机会）
+    markets = fetch_active_markets(limit=50)
     if not markets:
         return  # 无市场，静默
 
@@ -1203,6 +1234,16 @@ def main():
         print(format_optimization_report())
     except Exception as e:
         print(f"⚠️ 优化报告生成失败: {e}")
+
+    # 运行汇总
+    elapsed = _time.time() - start_time
+    print(f"\n📋 运行汇总:")
+    print(f"   扫描市场: {len(markets)} 个")
+    print(f"   分析决策: {len(decisions)} 个")
+    print(f"   本轮下单: {trades_made} 笔")
+    print(f"   耗时: {elapsed:.1f} 秒")
+    if len(decisions) == 0 and len(markets) > 0:
+        print(f"   ⚠️ 所有市场均被跳过（去重/价格/流动性过滤）")
 
 
 if __name__ == "__main__":

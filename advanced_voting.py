@@ -237,17 +237,17 @@ def create_voting_system(trade_history=None, model_weights=None):
         historical_accuracy = model_weights
     elif trade_history:
         model_names = [
-            "DeepSeek V4 Flash",
-            "Nemotron 3 Super",
             "MiniMax M2.7",
+            "Nemotron 3 Super",
+            "Llama 3.3 70B",
             "GLM-5.1",
         ]
         historical_accuracy = calculate_historical_accuracy(trade_history)
     else:
         model_names = [
-            "DeepSeek V4 Flash",
-            "Nemotron 3 Super",
             "MiniMax M2.7",
+            "Nemotron 3 Super",
+            "Llama 3.3 70B",
             "GLM-5.1",
         ]
         historical_accuracy = None
@@ -326,9 +326,9 @@ if __name__ == "__main__":
     # 测试1: 正常情况（模型一致）
     print("\n1. 正常情况（模型一致）:")
     predictions = {
-        "DeepSeek V4 Flash": 65,
+        "MiniMax M2.7": 65,
         "Nemotron 3 Super": 60,
-        "MiniMax M2.7": 70,
+        "Llama 3.3 70B": 70,
         "GLM-5.1": 68,
     }
     result = voting_system.vote(predictions)
@@ -340,9 +340,9 @@ if __name__ == "__main__":
     # 测试2: 分歧大
     print("\n2. 分歧大:")
     predictions = {
-        "DeepSeek V4 Flash": 30,
+        "MiniMax M2.7": 30,
         "Nemotron 3 Super": 60,
-        "MiniMax M2.7": 90,
+        "Llama 3.3 70B": 90,
         "GLM-5.1": 75,
     }
     result = voting_system.vote(predictions)
@@ -354,9 +354,9 @@ if __name__ == "__main__":
     # 测试3: 有异常值
     print("\n3. 有异常值:")
     predictions = {
-        "DeepSeek V4 Flash": 50,
+        "MiniMax M2.7": 50,
         "Nemotron 3 Super": 55,
-        "MiniMax M2.7": 5,  # 异常低
+        "Llama 3.3 70B": 5,  # 异常低
         "GLM-5.1": 52,
     }
     result = voting_system.vote(predictions)

@@ -20,59 +20,49 @@ def load_trade_history():
 
 def calculate_win_rate(trades):
     """
-    计算胜率（基于真实结算结果）
-
+    计算胜率
+    
     Args:
         trades: 交易列表
-
+    
     Returns:
         float: 胜率 (0-1)
     """
     if not trades:
         return 0
-
-    # 基于真实结算结果计算胜率
-    wins = 0
-    settled = 0
-
-    for trade in trades:
-        result = trade.get("result", "")
-        if result == "win":
-            wins += 1
-            settled += 1
-        elif result == "lose":
-            settled += 1
-        # pending/timeout 不计入
-
-    return wins / settled if settled > 0 else 0.5
+    
+    wins = sum(1 for t in trades if t.get("result") == "win")
+    settled = sum(1 for t in trades if t.get("result") in ("win", "lose"))
+    if settled == 0:
+        return 0
+    return wins / settled
 
 def calculate_profit_factor(trades):
     """
-    计算盈亏比（基于真实结算结果）
-
+    计算盈亏比
+    
     Args:
         trades: 交易列表
-
+    
     Returns:
         float: 盈亏比
     """
     if not trades:
         return 0
-
-    # 基于真实结算结果计算盈亏比
-    total_win = 0
-    total_loss = 0
-
-    for trade in trades:
-        result = trade.get("result", "")
-        pnl = trade.get("pnl", 0)
-
-        if result == "win" and pnl > 0:
-            total_win += pnl
-        elif result == "lose" and pnl < 0:
-            total_loss += abs(pnl)
-
-    return total_win / total_loss if total_loss > 0 else 0
+    
+    gross_profit = 0.0
+    gross_loss = 0.0
+    for t in trades:
+        if t.get("result") == "win":
+            amount = t.get("amount", 0)
+            mp = t.get("market_price", 0.5)
+            if mp > 0:
+                gross_profit += amount * (1 - mp) / mp
+        elif t.get("result") == "lose":
+            gross_loss += t.get("amount", 0)
+    if gross_loss == 0:
+        return float("inf") if gross_profit > 0 else 0
+    return gross_profit / gross_loss
 
 def analyze_strategy_performance(trades):
     """
