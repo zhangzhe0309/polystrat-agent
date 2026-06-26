@@ -7,6 +7,7 @@
 """
 import sys
 import traceback
+import time
 from datetime import datetime, timezone
 from functools import wraps
 from polystrat_logger import log, log_error
@@ -29,7 +30,12 @@ def categorize_error(error):
     
     return "unknown"
 
-def safe_execute(func, *args, default=None, retries=1, **kwargs):
+def exponential_backoff(attempt, base_delay=1, max_delay=60):
+    """指数退避计算"""
+    delay = min(base_delay * (2 ** attempt), max_delay)
+    return delay
+
+def safe_execute(func, *args, default=None, retries=3, base_delay=1, **kwargs):
     """
     安全执行函数
     
@@ -53,7 +59,9 @@ def safe_execute(func, *args, default=None, retries=1, **kwargs):
             category = categorize_error(e)
             
             if attempt < retries - 1:
-                log.warning(f"[{category}] {func.__name__} 失败 (尝试 {attempt + 1}/{retries}): {e}")
+                delay = exponential_backoff(attempt, base_delay)
+                log.warning(f"[{category}] {func.__name__} 失败 (尝试 {attempt + 1}/{retries}), {delay}s后重试: {e}")
+                time.sleep(delay)
             else:
                 log_error(func.__name__, e, f"最终失败 (类别: {category})")
     

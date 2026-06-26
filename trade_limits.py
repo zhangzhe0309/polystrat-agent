@@ -29,13 +29,21 @@ class TradeLimiter:
     """交易限额管理器"""
     
     def __init__(self):
+        # 确保目录存在且权限正确
+        STATE_FILE.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.state = self._load_state()
     
     def _load_state(self):
-        """加载状态"""
+        """加载状态（带文件锁）"""
+        import fcntl
         try:
             if STATE_FILE.exists():
-                return json.loads(STATE_FILE.read_text())
+                with open(STATE_FILE, 'r') as f:
+                    fcntl.flock(f, fcntl.LOCK_SH)  # 共享锁
+                    try:
+                        return json.load(f)
+                    finally:
+                        fcntl.flock(f, fcntl.LOCK_UN)
         except:
             pass
         
@@ -47,9 +55,24 @@ class TradeLimiter:
         }
     
     def _save_state(self):
-        """保存状态"""
+        """保存状态（原子写入+文件锁）"""
+        import fcntl
+        import tempfile
         try:
-            STATE_FILE.write_text(json.dumps(self.state, indent=2))
+            # 先写入临时文件
+            fd, tmp_path = tempfile.mkstemp(
+                dir=str(STATE_FILE.parent),
+                prefix='.tmp_',
+                suffix='.json'
+            )
+            with os.fdopen(fd, 'w') as tmp_file:
+                json.dump(self.state, tmp_file, indent=2)
+            
+            # 原子重命名
+            os.rename(tmp_path, str(STATE_FILE))
+            
+            # 设置权限
+            os.chmod(str(STATE_FILE), 0o600)
         except Exception as e:
             log_error("limits", e, "保存交易限额状态失败")
     

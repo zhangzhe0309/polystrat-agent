@@ -7,6 +7,7 @@ PolyStrat 统一日志模块
 """
 import logging
 import os
+import re
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from datetime import datetime
@@ -17,6 +18,22 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # 日志文件
 LOG_FILE = LOG_DIR / "polystrat.log"
+
+def sanitize_log_message(message):
+    """脱敏日志消息中的敏感信息"""
+    if not isinstance(message, str):
+        message = str(message)
+    
+    # 脱敏 API Key
+    message = re.sub(r'(api_key|apikey|token|secret|password|private_key)\s*[=:]\s*[^\s,;]+', 
+                     r'\1=***', message, flags=re.IGNORECASE)
+    
+    # 脱敏完整的密钥值
+    message = re.sub(r'nvapi-[a-zA-Z0-9_-]{20,}', 'nvapi-***', message)
+    message = re.sub(r'sk-[a-zA-Z0-9_-]{20,}', 'sk-***', message)
+    message = re.sub(r'0x[a-fA-F0-9]{40,}', '0x***', message)
+    
+    return message
 
 def get_logger(name="polystrat"):
     """
@@ -57,6 +74,18 @@ def get_logger(name="polystrat"):
     console_format = logging.Formatter(
         '%(levelname)-8s | %(message)s'
     )
+    
+    # 添加脱敏过滤器
+    class SanitizeFilter(logging.Filter):
+        def filter(self, record):
+            record.msg = sanitize_log_message(record.msg)
+            if record.args:
+                record.args = tuple(sanitize_log_message(str(a)) if isinstance(a, str) else a for a in record.args)
+            return True
+    
+    sanitize_filter = SanitizeFilter()
+    file_handler.addFilter(sanitize_filter)
+    console_handler.addFilter(sanitize_filter)
     
     file_handler.setFormatter(file_format)
     console_handler.setFormatter(console_format)

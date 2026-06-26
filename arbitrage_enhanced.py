@@ -175,9 +175,16 @@ def find_cross_platform_opportunities(min_similarity=0.5, min_spread=0.05):
             # 计算扣除费用后的利润
             fee1 = PLATFORMS[m1["platform"]]["fee"]
             fee2 = PLATFORMS[m2["platform"]]["fee"]
-            net_profit = spread - (fee1 + fee2)
+            gross_profit = spread - (fee1 + fee2)
             
-            if net_profit > 0:
+            # 滑点保护（预留 2% 滑点）
+            slippage = 0.02
+            net_profit = gross_profit - slippage
+            
+            # 单腿风险保护（价差必须大于滑点的2倍）
+            min_spread_for_arb = slippage * 2 + fee1 + fee2
+
+            if net_profit > 0 and spread > min_spread_for_arb:
                 opportunities.append({
                     "market1": m1,
                     "market2": m2,

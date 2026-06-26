@@ -15,12 +15,12 @@ from polystrat_logger import log, log_error
 STATE_FILE = Path("/root/.hermes/profiles/life/data/circuit_breaker.json")
 STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-# 断路器配置
+# 断路器配置（优化后：放宽触发条件，避免频繁触发）
 BREAKER_CONFIG = {
-    "max_consecutive_losses": 5,      # 最大连续亏损次数
-    "max_daily_loss": -50.0,          # 每日最大亏损
-    "max_drawdown": -100.0,           # 最大回撤
-    "cooldown_minutes": 30,           # 冷却时间（分钟）
+    "max_consecutive_losses": 10,     # 最大连续亏损次数（放宽到10次）
+    "max_daily_loss_pct": -0.20,      # 每日最大亏损比例（20%）
+    "max_drawdown_pct": -0.30,        # 最大回撤比例（30%）
+    "cooldown_minutes": 60,           # 冷却时间（分钟）（增加到60分钟）
     "auto_reset_hours": 24,           # 自动重置时间（小时）
 }
 
@@ -28,13 +28,21 @@ class CircuitBreaker:
     """断路器"""
     
     def __init__(self):
+        # 确保目录存在且权限正确
+        STATE_FILE.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.state = self._load_state()
     
     def _load_state(self):
-        """加载状态"""
+        """加载状态（带文件锁）"""
+        import fcntl
         try:
             if STATE_FILE.exists():
-                return json.loads(STATE_FILE.read_text())
+                with open(STATE_FILE, 'r') as f:
+                    fcntl.flock(f, fcntl.LOCK_SH)  # 共享锁
+                    try:
+                        return json.load(f)
+                    finally:
+                        fcntl.flock(f, fcntl.LOCK_UN)
         except:
             pass
         
@@ -49,9 +57,24 @@ class CircuitBreaker:
         }
     
     def _save_state(self):
-        """保存状态"""
+        """保存状态（原子写入+文件锁）"""
+        import fcntl
+        import tempfile
         try:
-            STATE_FILE.write_text(json.dumps(self.state, indent=2))
+            # 先写入临时文件
+            fd, tmp_path = tempfile.mkstemp(
+                dir=str(STATE_FILE.parent),
+                prefix='.tmp_',
+                suffix='.json'
+            )
+            with os.fdopen(fd, 'w') as tmp_file:
+                json.dump(self.state, tmp_file, indent=2)
+            
+            # 原子重命名
+            os.rename(tmp_path, str(STATE_FILE))
+            
+            # 设置权限
+            os.chmod(str(STATE_FILE), 0o600)
         except Exception as e:
             log_error("breaker", e, "保存断路器状态失败")
     
@@ -108,15 +131,18 @@ class CircuitBreaker:
             should_trip = True
             reason = f"连续亏损 {self.state['consecutive_losses']} 次"
         
-        # 每日亏损检查
-        if self.state["daily_pnl"] <= BREAKER_CONFIG["max_daily_loss"]:
+        # 每日亏损比例检查（基于初始资金 $200）
+        initial_balance = 200.0
+        daily_loss_pct = self.state["daily_pnl"] / initial_balance
+        if daily_loss_pct <= BREAKER_CONFIG["max_daily_loss_pct"]:
             should_trip = True
-            reason = f"每日亏损 ${self.state['daily_pnl']:.2f}"
+            reason = f"每日亏损 {daily_loss_pct:.1%}"
         
-        # 总回撤检查
-        if self.state["total_pnl"] <= BREAKER_CONFIG["max_drawdown"]:
+        # 总回撤比例检查
+        total_drawdown_pct = self.state["total_pnl"] / initial_balance
+        if total_drawdown_pct <= BREAKER_CONFIG["max_drawdown_pct"]:
             should_trip = True
-            reason = f"总回撤 ${self.state['total_pnl']:.2f}"
+            reason = f"总回撤 {total_drawdown_pct:.1%}"
         
         if should_trip:
             self._trip(reason)

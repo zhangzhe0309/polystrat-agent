@@ -40,8 +40,11 @@ class AdvancedVotingSystem:
             # 默认等权重
             self.weights = {model: 1.0 / self.n_models for model in model_names}
         
-        # 分歧阈值（标准差）
-        self.disagreement_threshold = 20  # 超过20%认为分歧大
+        # 分歧阈值（动态调整）
+        # 低波动市场：15% 阈值
+        # 正常市场：20% 阈值
+        # 高波动市场：30% 阈值
+        self.disagreement_threshold = 20  # 默认阈值
         
     def detect_outliers(self, predictions):
         """
@@ -104,6 +107,30 @@ class AdvancedVotingSystem:
         confidence = 0.7 * consistency_score + 0.3 * weight_score
         return min(1, max(0, confidence))
     
+    def get_dynamic_threshold(self, predictions):
+        """
+        根据市场波动动态调整分歧阈值
+        
+        Args:
+            predictions: 预测值数组
+        
+        Returns:
+            float: 动态阈值
+        """
+        if len(predictions) < 2:
+            return self.disagreement_threshold
+        
+        # 计算预测值的标准差
+        std = np.std(predictions)
+        
+        # 根据标准差调整阈值
+        if std < 10:  # 低波动
+            return 15
+        elif std > 30:  # 高波动
+            return 30
+        else:  # 正常
+            return 20
+
     def vote(self, predictions_dict):
         """
         执行加权投票
@@ -162,9 +189,12 @@ class AdvancedVotingSystem:
         
         # 计算置信度
         confidence = self.calculate_confidence(pred_array, adjusted_weights)
+
+        # 获取动态阈值
+        dynamic_threshold = self.get_dynamic_threshold(pred_array)
         
         # 判断是否需要人工审查
-        need_review = disagreement > self.disagreement_threshold or confidence < 0.4
+        need_review = disagreement > dynamic_threshold or confidence < 0.4
         
         return {
             'final_prediction': weighted_sum,
