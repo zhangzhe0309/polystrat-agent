@@ -37,29 +37,44 @@ from dynamic_optimizer import (
     format_optimization_report)
 from polystrat_logger import log, log_error, log_api_call, log_performance
 from safe_file_ops import atomic_write_json, atomic_read_json, append_to_json_array
+from circuit_breaker import check_breaker, record_trade_result, get_breaker_status
+from trade_limits import check_trade_allowed, record_trade, get_limits_status
 
 # === 配置 ===
-# LLM Ensemble 链：Qwen 3.5 + Kimi K2.6 + Llama 3.3 70B（三模型投票）
+# LLM Ensemble 链：多模型投票 + 多 API Key 容错
 LLM_PROVIDERS = [
     {
         "name": "Qwen 3.5",
         "api_key": os.environ.get("NVIDIA_API_KEY_2", ""),
         "base_url": "https://integrate.api.nvidia.com/v1",
         "model": "qwen/qwen3.5-397b-a17b",
+        "priority": 1,  # 优先级（1最高）
     },
     {
         "name": "Kimi K2.6",
-        "api_key": os.environ.get("NVIDIA_API_KEY_2", ""),
+        "api_key": os.environ.get("NVIDIA_API_KEY", ""),  # 使用不同的 API Key
         "base_url": "https://integrate.api.nvidia.com/v1",
         "model": "moonshotai/kimi-k2.6",
+        "priority": 2,
     },
     {
         "name": "Llama 3.3 70B",
         "api_key": os.environ.get("NVIDIA_API_KEY_2", ""),
         "base_url": "https://integrate.api.nvidia.com/v1",
         "model": "meta/llama-3.3-70b-instruct",
+        "priority": 3,
+    },
+    {
+        "name": "GLM-5.1",
+        "api_key": os.environ.get("GLM_API_KEY", ""),
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "model": "glm-5.1",
+        "priority": 4,  # 备用模型
     },
 ]
+
+# 按优先级排序
+LLM_PROVIDERS.sort(key=lambda x: x.get("priority", 99))
 
 # Polymarket
 POLYMARKET_FUNDER = os.environ.get("POLYMARKET_FUNDER_ADDRESS", "")
@@ -715,6 +730,13 @@ def main():
 
         # 8. 如果优势足够大，且通过风险检查，下单
         if abs(edge) >= edge_threshold and trades_made < MAX_TRADES_PER_RUN and token_id and should_trade_flag:
+            # 检查断路器
+            if not check_breaker():
+                log.warning("断路器已断开，跳过交易")
+                decision["order_result"] = {"status": "BLOCKED", "reason": "断路器断开"}
+                decisions.append(decision)
+                continue
+            
             # 计算仓位大小（使用流动性适配版本）
             # 内置硬上限: min(流动性调整, 余额5%, 基础仓位2倍)
             position_size = calculate_position_with_liquidity(
@@ -723,6 +745,14 @@ def main():
                 liquidity,
                 base_amount=BET_AMOUNT
             )
+            
+            # 检查交易限额
+            allowed, limit_reason = check_trade_allowed(position_size, balance)
+            if not allowed:
+                log.warning(f"交易限额拒绝: {limit_reason}")
+                decision["order_result"] = {"status": "BLOCKED", "reason": limit_reason}
+                decisions.append(decision)
+                continue
             
             result = place_order(token_id, "BUY", position_size, order_price)
             decision["order_result"] = result
@@ -748,6 +778,9 @@ def main():
                 "result": "pending"  # 初始状态：待结算
             })
             trades_made += 1
+            
+            # 记录到交易限额
+            record_trade(position_size)
 
         decisions.append(decision)
 
@@ -767,8 +800,28 @@ def main():
         print(f"   总仓位: {risk_report['total_exposure']:.2f}")
         print(f"   风险等级: {risk_report['risk_level']}")
     except Exception as e:
+        log_error("main", e, "风险报告生成失败")
         print(f"⚠️ 风险报告生成失败: {e}")
-        print(output)
+    
+    # 11. 输出断路器状态
+    try:
+        breaker_status = get_breaker_status()
+        status_emoji = {"closed": "🟢", "open": "🔴", "half_open": "🟡"}
+        print(f"\n⚡ 断路器状态:")
+        print(f"   状态: {status_emoji.get(breaker_status['status'], '❓')} {breaker_status['status']}")
+        print(f"   连续亏损: {breaker_status['consecutive_losses']}")
+        print(f"   今日盈亏: ${breaker_status['daily_pnl']:+.2f}")
+    except Exception as e:
+        log_error("main", e, "断路器状态获取失败")
+    
+    # 12. 输出交易限额状态
+    try:
+        limits_status = get_limits_status()
+        print(f"\n📊 交易限额:")
+        print(f"   今日交易: {limits_status['daily_trades']}/{limits_status['max_daily_trades']}")
+        print(f"   今日交易量: ${limits_status['daily_volume']:.2f}/${limits_status['max_daily_volume']:.2f}")
+    except Exception as e:
+        log_error("main", e, "交易限额状态获取失败")
     
     # 输出动态优化报告
     try:
