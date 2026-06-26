@@ -20,36 +20,59 @@ def load_trade_history():
 
 def calculate_win_rate(trades):
     """
-    计算胜率
-    
+    计算胜率（基于真实结算结果）
+
     Args:
         trades: 交易列表
-    
+
     Returns:
         float: 胜率 (0-1)
     """
     if not trades:
         return 0
-    
-    # 注意：DRY_RUN 模式下没有实际盈亏
-    # 这里返回模拟胜率
-    return 0.55  # 假设 55% 胜率
+
+    # 基于真实结算结果计算胜率
+    wins = 0
+    settled = 0
+
+    for trade in trades:
+        result = trade.get("result", "")
+        if result == "win":
+            wins += 1
+            settled += 1
+        elif result == "lose":
+            settled += 1
+        # pending/timeout 不计入
+
+    return wins / settled if settled > 0 else 0.5
 
 def calculate_profit_factor(trades):
     """
-    计算盈亏比
-    
+    计算盈亏比（基于真实结算结果）
+
     Args:
         trades: 交易列表
-    
+
     Returns:
         float: 盈亏比
     """
     if not trades:
         return 0
-    
-    # 模拟盈亏比
-    return 1.5  # 假设 1.5 盈亏比
+
+    # 基于真实结算结果计算盈亏比
+    total_win = 0
+    total_loss = 0
+
+    for trade in trades:
+        result = trade.get("result", "")
+        pnl = trade.get("pnl", 0)
+
+        if result == "win" and pnl > 0:
+            total_win += pnl
+        elif result == "lose" and pnl < 0:
+            total_loss += abs(pnl)
+
+    return total_win / total_loss if total_loss > 0 else 0
 
 def analyze_strategy_performance(trades):
     """

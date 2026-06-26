@@ -953,6 +953,8 @@ def main():
             onchain_signal_prob = 0.5 + 0.35 * onchain_confidence_val * onchain_mult
         elif onchain_recommendation == "buy":
             onchain_signal_prob = 0.5 + 0.15 * onchain_confidence_val * onchain_mult
+        elif onchain_recommendation == "strong_sell":
+            onchain_signal_prob = 0.5 - 0.35 * onchain_confidence_val * onchain_mult
         elif onchain_recommendation == "sell":
             onchain_signal_prob = 0.5 - 0.15 * onchain_confidence_val * onchain_mult
         else:
