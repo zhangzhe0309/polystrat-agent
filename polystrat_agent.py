@@ -56,6 +56,7 @@ from settlement_tracker import (
     format_settlement_report as fmt_settlement_report,
 )
 from settlement_tracker import set_trade_log_path as set_settlement_log_path
+from market_microstructure import calculate_microstructure_signal, format_microstructure_report
 
 # === 配置 ===
 # LLM Ensemble 链：双主力(reasoning) + 双辅助(快速验证)
@@ -131,13 +132,22 @@ SWEET_SPOT_CONFIG = {
 # 启用甜蜜点模式（True=聚焦甜蜜点，False=使用原始阈值）
 SWEET_SPOT_MODE = True
 
+# 市场微观结构信号配置
+MICROSTRUCTURE_CONFIG = {
+    "enabled": True,           # 启用微观结构信号
+    "weight": 0.10,            # 权重 10%
+    "min_confidence": 0.3,     # 最低置信度
+    "prefer_tight_spread": True,  # 优先选择价差小的市场
+}
+
 # 权重配置（优化后：降低LLM共线性风险，提高ML/链上权重）
-# 信号源: LLM, 情感, 链上, ML
+# 信号源: LLM, 情感, 链上, ML, 微观结构
 SIGNAL_WEIGHTS = {
-    "llm": 0.25,  # LLM 分析权重（降低，避免与情感信号共线性）
-    "sentiment": 0.15,  # 新闻情感权重（降低，与LLM有重叠）
-    "onchain": 0.30,  # 链上信号权重（提高，更独立的数据源）
-    "ml": 0.30,  # ML 信号权重（提高，数据驱动）
+    "llm": 0.20,  # LLM 分析权重（降低，为微观结构腾出空间）
+    "sentiment": 0.15,  # 新闻情感权重
+    "onchain": 0.25,  # 链上信号权重
+    "ml": 0.25,  # ML 信号权重
+    "microstructure": 0.15,  # 市场微观结构信号权重
 }
 
 # 验证权重归一化
@@ -789,7 +799,7 @@ def main():
     ml_weight = adaptive_weights.get("ml_weight", SIGNAL_WEIGHTS["ml"])
     edge_threshold = adaptive_weights.get("edge_threshold", EDGE_THRESHOLD)
 
-    # 归一化确保4信号权重总和=1.0
+    # 归一化确保4信号权重总和=1.0（不含微观结构和套利）
     adaptive_weight_sum = llm_weight + sentiment_weight + onchain_weight + ml_weight
     if abs(adaptive_weight_sum - 1.0) > 0.01:
         llm_weight /= adaptive_weight_sum
@@ -799,17 +809,22 @@ def main():
 
     # 多平台/套利信号权重（从各信号等比抽取，保持总和1.0）
     ARBITRAGE_WEIGHT = 0.05
-    llm_weight *= 1 - ARBITRAGE_WEIGHT
-    sentiment_weight *= 1 - ARBITRAGE_WEIGHT
-    onchain_weight *= 1 - ARBITRAGE_WEIGHT
-    ml_weight *= 1 - ARBITRAGE_WEIGHT
+    MICROSTRUCTURE_WEIGHT = MICROSTRUCTURE_CONFIG["weight"] if MICROSTRUCTURE_CONFIG["enabled"] else 0
+
+    # 调整权重，确保总和=1.0（含微观结构和套利）
+    total_extra_weight = ARBITRAGE_WEIGHT + MICROSTRUCTURE_WEIGHT
+    if total_extra_weight > 0:
+        llm_weight *= 1 - total_extra_weight
+        sentiment_weight *= 1 - total_extra_weight
+        onchain_weight *= 1 - total_extra_weight
+        ml_weight *= 1 - total_extra_weight
 
     # 输出权重配置（包含动态优化信息）
     print(f"⚖️ 自适应权重配置:")
     print(
         f"   LLM: {llm_weight:.3f} | 情感: {sentiment_weight:.3f} | 链上: {onchain_weight:.3f} | ML: {ml_weight:.3f}"
     )
-    print(f"   优势阈值: {edge_threshold:.2%} | 套利信号: {ARBITRAGE_WEIGHT:.0%}")
+    print(f"   优势阈值: {edge_threshold:.2%} | 套利信号: {ARBITRAGE_WEIGHT:.0%} | 微观结构: {MICROSTRUCTURE_WEIGHT:.0%}")
     print(
         f"   情感斜率: {adaptive_weights.get('sentiment_mapping_slope', 0.35):.2f} | 链上乘数: {adaptive_weights.get('onchain_multiplier', 1.0):.2f}"
     )
@@ -824,6 +839,13 @@ def main():
         print(f"   分歧区间: {SWEET_SPOT_CONFIG['min_disagreement']}% - {SWEET_SPOT_CONFIG['max_disagreement']}%")
         print(f"   最低置信度: {SWEET_SPOT_CONFIG['min_confidence']:.0%}")
         print(f"   优选类型: {', '.join(SWEET_SPOT_CONFIG['preferred_categories'])}")
+        print()
+
+    # 输出微观结构配置
+    if MICROSTRUCTURE_CONFIG["enabled"]:
+        print(f"📊 市场微观结构信号: 已启用")
+        print(f"   权重: {MICROSTRUCTURE_CONFIG['weight']:.0%}")
+        print(f"   最低置信度: {MICROSTRUCTURE_CONFIG['min_confidence']:.0%}")
         print()
 
     # 输出 LLM 模型动态权重
@@ -1054,7 +1076,39 @@ def main():
         if ml_confidence <= 0.5 and ml_prob == 0.5:
             signal_fallbacks += 1  # ML 信号无有效数据
 
-        # 信号5: 多平台/套利信号（方向感知：套利信号不偏向 Yes 或 No）
+        # 信号5: 市场微观结构信号（订单簿、价差、成交量）
+        if MICROSTRUCTURE_CONFIG["enabled"]:
+            try:
+                microstructure_signal = calculate_microstructure_signal(
+                    condition_id, token_id, market.get("slug")
+                )
+                microstructure_prob = microstructure_signal.get("confidence", 0.3)
+                microstructure_recommendation = microstructure_signal.get("recommendation", "hold")
+
+                # 将微观结构信号转换为概率
+                if microstructure_recommendation == "buy":
+                    microstructure_signal_prob = 0.5 + 0.2 * microstructure_prob
+                elif microstructure_recommendation == "sell":
+                    microstructure_signal_prob = 0.5 - 0.2 * microstructure_prob
+                else:
+                    microstructure_signal_prob = 0.5
+
+                microstructure_signal_prob = max(0.01, min(0.99, microstructure_signal_prob))
+
+                # 检查置信度
+                if microstructure_prob < MICROSTRUCTURE_CONFIG["min_confidence"]:
+                    signal_fallbacks += 1
+
+            except Exception as e:
+                microstructure_signal = {"recommendation": "hold", "confidence": 0.3}
+                microstructure_signal_prob = 0.5
+                signal_fallbacks += 1
+                print(f"⚠️ 微观结构信号分析失败: {e}")
+        else:
+            microstructure_signal = {"recommendation": "hold", "confidence": 0.3}
+            microstructure_signal_prob = 0.5
+
+        # 信号6: 多平台/套利信号（方向感知：套利信号不偏向 Yes 或 No）
         # 套利本身是价格差异，不改变事件概率判断，仅作为置信度加成
         if has_arbitrage and arbitrage_opportunities:
             # 套利机会的存在增强了对当前市场定价的置信度
@@ -1063,12 +1117,13 @@ def main():
         else:
             arbitrage_signal = 0.5
 
-        # 使用自适应权重进行加权平均（含套利信号）
+        # 使用自适应权重进行加权平均（含微观结构和套利信号）
         final_prob = (
             llm_signal_prob * llm_weight
             + sentiment_signal_prob * sentiment_weight
             + onchain_signal_prob * onchain_weight
             + ml_signal_prob * ml_weight
+            + microstructure_signal_prob * MICROSTRUCTURE_CONFIG["weight"]
             + arbitrage_signal * ARBITRAGE_WEIGHT
         )
 
