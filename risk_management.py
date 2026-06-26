@@ -94,7 +94,11 @@ def calculate_position_size(balance, confidence, market_category=None):
 
 def check_stop_loss(balance=None, trade_history=None):
     """
-    检查止损：计算累计亏损是否超过阈值
+    检查止损：累计亏损 + 未结算敞口双重保护
+
+    止损逻辑：
+    1. 已结算亏损回撤 > 10% → 触发
+    2. 未结算总敞口 > 余额 25% → 触发（防止在结算前过度暴露）
 
     Args:
         balance: 初始/参考余额（从环境变量读取）
@@ -112,11 +116,13 @@ def check_stop_loss(balance=None, trade_history=None):
     # 统计已结算交易的盈亏
     net_pnl = 0.0
     settled_count = 0
+    pending_exposure = 0.0
+    pending_count = 0
+
     for t in trade_history:
         result = t.get("result", "pending")
         amount = t.get("amount", 0)
         market_price = t.get("market_price", 0.5)
-        direction = t.get("direction", "Yes")
         if result == "lose":
             net_pnl -= amount
             settled_count += 1
@@ -126,9 +132,13 @@ def check_stop_loss(balance=None, trade_history=None):
             if market_price > 0:
                 net_pnl += amount * (1 - market_price) / market_price
             settled_count += 1
+        elif result in ("pending", "", None):
+            pending_exposure += amount
+            pending_count += 1
 
     drawdown_pct = -net_pnl / balance if balance > 0 else 0  # 正数 = 回撤幅度
 
+    # 检查1: 已结算亏损回撤
     if drawdown_pct > STOP_LOSS_THRESHOLD:
         print(
             f"🚨 止损触发: 累计回撤 {drawdown_pct:.2%} > 阈值 {STOP_LOSS_THRESHOLD:.2%} "
@@ -138,6 +148,20 @@ def check_stop_loss(balance=None, trade_history=None):
             "triggered": True,
             "drawdown_pct": drawdown_pct,
             "reason": f"累计回撤 {drawdown_pct:.2%}",
+        }
+
+    # 检查2: 未结算敞口过大（防止在结算前过度暴露）
+    # Polymarket 结算可能需要数小时到数周，期间资金被锁定
+    pending_exposure_pct = pending_exposure / balance if balance > 0 else 0
+    if pending_exposure_pct > 0.25:
+        print(
+            f"🚨 止损触发: 未结算敞口 {pending_exposure_pct:.2%} > 25% "
+            f"({pending_count} 笔待结算, 敞口 ${pending_exposure:.2f})"
+        )
+        return {
+            "triggered": True,
+            "drawdown_pct": drawdown_pct,
+            "reason": f"未结算敞口 {pending_exposure_pct:.2%} ({pending_count}笔)",
         }
 
     return {"triggered": False, "drawdown_pct": drawdown_pct, "reason": "正常"}
