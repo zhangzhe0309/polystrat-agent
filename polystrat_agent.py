@@ -57,6 +57,7 @@ from settlement_tracker import (
 )
 from settlement_tracker import set_trade_log_path as set_settlement_log_path
 from market_microstructure import calculate_microstructure_signal, format_microstructure_report
+from arbitrage_engine import scan_all_arbitrage, format_arbitrage_report
 
 # === 配置 ===
 # LLM Ensemble 链：双主力(reasoning) + 双辅助(快速验证)
@@ -735,6 +736,15 @@ def main():
             )
     except Exception as e:
         log_error("settlement", e, "结算同步失败（非致命）")
+
+    # === 套利扫描（Dutch Book + negRisk）===
+    try:
+        arb_result = scan_all_arbitrage()
+        if arb_result["total"] > 0:
+            print(format_arbitrage_report(arb_result))
+            # 套利机会直接输出，不参与后续信号分析
+    except Exception as e:
+        log_error("arbitrage", e, "套利扫描失败（非致命）")
 
     # 1. 获取活跃市场（按流动性排序取前50，覆盖更多机会）
     markets = fetch_active_markets(limit=50)
