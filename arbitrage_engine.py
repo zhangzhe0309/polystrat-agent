@@ -310,6 +310,7 @@ def scan_negrisk_groups(limit=100):
 
             outcomes = []
             total_yes = 0
+            skipped_zero = 0
 
             for market in event_markets:
                 tokens = market.get("clobTokenIds", "")
@@ -329,7 +330,9 @@ def scan_negrisk_groups(limit=100):
                 except Exception:
                     continue
 
-                if yes_price <= 0:
+                # 跳过零价格和极低价格市场（未激活/无流动性）
+                if yes_price <= 0.001:
+                    skipped_zero += 1
                     continue
 
                 total_yes += yes_price
@@ -339,7 +342,14 @@ def scan_negrisk_groups(limit=100):
                     "orderbook": {"asks": [{"price": str(yes_price), "size": "1000"}]},
                 })
 
+            # 至少需要 3 个有效 outcome
             if len(outcomes) < 3:
+                continue
+
+            # 完整性检查：有效 outcome 应占总数的大部分
+            valid_ratio = len(outcomes) / len(event_markets) if event_markets else 0
+            if valid_ratio < 0.5:
+                log.warning(f"negRisk 完整性不足: {event_title[:30]} 只有 {len(outcomes)}/{len(event_markets)} 个有效 outcome")
                 continue
 
             opp = detect_mutually_exclusive(outcomes)
