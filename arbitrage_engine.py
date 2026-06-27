@@ -271,12 +271,15 @@ def scan_binary_markets(limit=50):
     return opportunities
 
 
-def scan_negrisk_groups(limit=200):
+def scan_negrisk_groups(limit=100):
     """
     扫描 negRisk 多结果市场组寻找套利机会
 
+    使用 /events API 获取 negRisk=True 的事件组，
+    比 /markets 的 slug 分组更准确。
+
     Args:
-        limit: 扫描市场数量
+        limit: 扫描事件数量
 
     Returns:
         list: 套利机会列表
@@ -284,42 +287,31 @@ def scan_negrisk_groups(limit=200):
     opportunities = []
 
     try:
+        # 使用 events API 获取 negRisk 组
         resp = requests.get(
-            f"{GAMMA_API}/markets",
+            f"{GAMMA_API}/events",
             params={"closed": "false", "limit": limit, "active": "true"},
             timeout=15,
         )
         if resp.status_code != 200:
             return opportunities
 
-        markets = resp.json()
+        events = resp.json()
 
-        # 按 group_id 分组
-        groups = {}
-        for market in markets:
-            # negRisk 市场有 groupItemTitle 字段
-            group_id = market.get("groupItemTitle", "")
-            if not group_id:
-                continue
+        # 只处理 negRisk=True 的事件
+        neg_risk_events = [e for e in events if e.get("negRisk", False)]
 
-            # 用事件 slug 作为分组键
-            event_slug = market.get("slug", "").rsplit("-", 1)[0] if market.get("slug") else ""
-            if not event_slug:
-                continue
+        for event in neg_risk_events:
+            event_title = event.get("title", "?")
+            event_markets = event.get("markets", [])
 
-            if event_slug not in groups:
-                groups[event_slug] = []
-            groups[event_slug].append(market)
-
-        # 检查每组
-        for event_slug, group_markets in groups.items():
-            if len(group_markets) < 3:  # 至少 3 个结果才有意义
+            if len(event_markets) < 3:
                 continue
 
             outcomes = []
             total_yes = 0
 
-            for market in group_markets:
+            for market in event_markets:
                 tokens = market.get("clobTokenIds", "")
                 try:
                     token_list = json.loads(tokens) if isinstance(tokens, str) else tokens
@@ -329,20 +321,22 @@ def scan_negrisk_groups(limit=200):
                 if not token_list:
                     continue
 
-                yes_token = token_list[0]
-                book = get_orderbook(yes_token)
-                if not book:
+                # 直接用 outcomePrices（Gamma API 已提供，无需查订单簿）
+                prices = market.get("outcomePrices", "[]")
+                try:
+                    price_list = json.loads(prices) if isinstance(prices, str) else prices
+                    yes_price = float(price_list[0]) if price_list else 0
+                except Exception:
                     continue
 
-                ask = best_ask(book)
-                if not ask:
+                if yes_price <= 0:
                     continue
 
-                total_yes += ask[0]
+                total_yes += yes_price
                 outcomes.append({
-                    "token_id": yes_token,
+                    "token_id": token_list[0],
                     "label": market.get("question", "")[:30],
-                    "orderbook": book,
+                    "orderbook": {"asks": [{"price": str(yes_price), "size": "1000"}]},
                 })
 
             if len(outcomes) < 3:
@@ -350,11 +344,11 @@ def scan_negrisk_groups(limit=200):
 
             opp = detect_mutually_exclusive(outcomes)
             if opp:
-                opp["event_slug"] = event_slug
-                opp["event_title"] = group_markets[0].get("question", "").split("?")[0] + "?"
+                opp["event_title"] = event_title
+                opp["n_outcomes"] = len(outcomes)
                 opportunities.append(opp)
-                log.info(f"🎯 negRisk 套利发现: {opp['event_title'][:50]} | "
-                         f"edge={opp['edge_pct']:.1f}% | {opp['n_outcomes']} outcomes")
+                log.info(f"🎯 negRisk 套利发现: {event_title[:50]} | "
+                         f"edge={opp['edge_pct']:.1f}% | {len(outcomes)} outcomes")
 
     except Exception as e:
         log_error("arbitrage", e, "扫描 negRisk 市场失败")
