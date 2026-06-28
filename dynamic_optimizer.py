@@ -37,7 +37,7 @@ DEFAULT_CONFIG = {
         "newsdata": 0.75,
         "nytimes": 0.9,
         "serpapi": 0.85,
-        "rss": 0.6,
+        "rss": 0.75,
     },
     "price_thresholds": {"min_price": 0.03, "max_price": 0.97},
     "dedup_hours": 24,
