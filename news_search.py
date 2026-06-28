@@ -37,9 +37,10 @@ RSS_FEEDS = {
     "reuters": "https://www.reutersagency.com/feed/",
     "cnn": "http://rss.cnn.com/rss/edition.rss",
     "cnbc": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114",
-    # Polymarket 相关源（新增）
-    "polymarket_blog": "https://blog.polymarket.com/rss/",
-    "prediction_market_news": "https://predictionmarketnews.com/feed/",
+    "npr_world": "https://feeds.npr.org/1004/rss.xml",
+    "npr_tech": "https://feeds.npr.org/1019/rss.xml",
+    "coindesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
+    "decrypt": "https://decrypt.co/feed",
 }
 
 
