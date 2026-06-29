@@ -877,6 +877,13 @@ def main():
     print()
 
     for market in markets:
+        # 全局超时检查：超过 80 秒硬截断（防止某个市场卡死整次 cron）
+        elapsed = _time.time() - start_time
+        if elapsed >= 80:
+            print(f"⏰ 全局超时 {elapsed:.0f}s >= 80s，中断后续市场扫描")
+            log.warning(f"全局超时 {elapsed:.0f}s，仅处理了 {len(decisions)}/{len(markets)} 个市场")
+            break
+
         title = market["title"]
         yes_price = market["yes_price"]
         category = market.get("category", "Other")
