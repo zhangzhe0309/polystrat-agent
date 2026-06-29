@@ -431,12 +431,13 @@ def search_news_for_market(market_title, max_results=5, use_cache=True):
     ]
 
     # 并行执行（最多4线程，避免API限流）
+    # 2026-06-29: 降低超时 (20→10s / 15→8s)，避免 news_search 卡死整个 agent
     executor = ThreadPoolExecutor(max_workers=4)
     try:
         futures = {executor.submit(task): name for name, task in search_tasks}
-        for future in as_completed(futures, timeout=20):
+        for future in as_completed(futures, timeout=10):
             try:
-                result = future.result(timeout=15)
+                result = future.result(timeout=8)
                 if result:
                     all_news.extend(result)
             except Exception as e:

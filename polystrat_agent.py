@@ -410,7 +410,7 @@ def search_news(query, max_results=3):
             "https://lite.duckduckgo.com/lite/",
             params={"q": query},
             headers={"User-Agent": "Mozilla/5.0"},
-            timeout=15,
+            timeout=8,
         )
         # 简单提取搜索结果摘要
         text = resp.text
