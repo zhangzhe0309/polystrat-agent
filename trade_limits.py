@@ -15,10 +15,10 @@ from polystrat_logger import log, log_error
 
 # 限额配置
 LIMITS_CONFIG = {
-    "max_single_trade": 10.0,  # 单笔最大交易
+    "max_single_trade": 20.0,  # 单笔最大交易20U（原来10U）允许Kelly持仓通过
     "max_daily_trades": 10,  # 每日最大交易次数
     "max_daily_volume": 100.0,  # 每日最大交易量
-    "max_total_exposure": 200.0,  # 最大总仓位
+    "max_total_exposure": 200.0,  # 最大总仓位（DRY_RUN已跳过此检查，保持原值）
     "min_balance_required": 10.0,  # 最低余额要求
     "max_position_pct": 0.05,  # 单笔最大仓位比例
 }

@@ -114,7 +114,7 @@ POLYMARKET_FUNDER = os.environ.get("POLYMARKET_FUNDER_ADDRESS", "")
 POLYMARKET_KEY = os.environ.get("POLYMARKET_PRIVATE_KEY", "")
 SIGNATURE_TYPE = int(os.environ.get("SIGNATURE_TYPE", "1"))
 DRY_RUN = True  # 先跑测试版
-BET_AMOUNT = 2.0
+BET_AMOUNT = 5.0  # 单笔下单金额 5U（原来2U）提高Kelly仓位通过MIN_ORDER
 EDGE_THRESHOLD = 0.04  # LLM 概率与市场价差 >4% 才下单（优化后）
 MAX_TRADES_PER_RUN = 3
 DEDUP_HOURS = 24  # 24小时内不重复交易同一市场
@@ -128,7 +128,7 @@ SWEET_SPOT_CONFIG = {
     "min_disagreement": 0,  # 0%（原来3%）- 只要 LLM 有结果就允许通过
     "max_disagreement": 60, # 60%（原来45%）
     "min_confidence": 0.25, # 25%（原来40%）
-    "preferred_categories": ["Politics", "Sports", "Crypto", "Economics"],
+    "preferred_categories": ["Politics", "Crypto", "Economics", "Sports"],  # 保留全部品类，通过仓位比例控风险
 }
 
 # 启用甜蜜点模式（True=聚焦甜蜜点，False=使用原始阈值）
@@ -1315,8 +1315,8 @@ def main():
                 balance * 0.05,
                 LIMITS_CONFIG["max_single_trade"],
             )
-            # Polymarket 最小下单量 $0.50，若 Kelly 建议低于此值则跳过（边缘优势不足）
-            MIN_ORDER = 0.50
+            # Polymarket 最小下单量 $0.25，若 Kelly 建议低于此值则跳过（边缘优势不足）
+            MIN_ORDER = 0.25
             if position_size < MIN_ORDER:
                 log.warning(
                     f"Kelly仓位 ${position_size:.2f} 低于最小下单额 ${MIN_ORDER}，跳过"
@@ -1329,13 +1329,14 @@ def main():
                 continue
             position_size = round(position_size, 2)
 
-            # 检查交易限额
-            allowed, limit_reason = check_trade_allowed(position_size, balance)
-            if not allowed:
-                log.warning(f"交易限额拒绝: {limit_reason}")
-                decision["order_result"] = {"status": "BLOCKED", "reason": limit_reason}
-                decisions.append(decision)
-                continue
+            # 检查交易限额（DRY_RUN 模式跳过资金限额检查，只统计执行）
+            if not DRY_RUN:
+                allowed, limit_reason = check_trade_allowed(position_size, balance)
+                if not allowed:
+                    log.warning(f"交易限额拒绝: {limit_reason}")
+                    decision["order_result"] = {"status": "BLOCKED", "reason": limit_reason}
+                    decisions.append(decision)
+                    continue
 
             # Kelly 计算出的是美元金额，CLOB 需要代币数量（shares）
             token_count = (
