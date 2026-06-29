@@ -36,3 +36,5 @@ Thumbs.db
 *.json
 !package.json
 .venv/
+
+*.stackdump
