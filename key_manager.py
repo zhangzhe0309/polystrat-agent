@@ -12,7 +12,7 @@ from pathlib import Path
 from polystrat_logger import log
 
 # 审计日志
-AUDIT_LOG = Path("/root/.hermes/profiles/life/home/.hermes/polymarket_bot/logs/key_audit.log")
+from config_center import KEY_AUDIT_LOG as AUDIT_LOG
 AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
 
 # 审计日志记录器

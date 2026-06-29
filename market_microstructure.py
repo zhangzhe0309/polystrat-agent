@@ -16,11 +16,10 @@ from pathlib import Path
 from polystrat_logger import log, log_error
 
 # Polymarket API
-GAMMA_API = "https://gamma-api.polymarket.com"
-CLOB_API = "https://clob.polymarket.com"
+from config_center import GAMMA_API, CLOB_API
 
 # 缓存配置
-CACHE_DIR = Path("/root/.hermes/profiles/life/data/market_microstructure")
+from config_center import MARKET_MICROSTRUCTURE_CACHE as CACHE_DIR
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 CACHE_TTL_HOURS = 1  # 缓存有效期 1 小时
 
@@ -46,7 +45,8 @@ def load_cached_data(market_slug):
             return None
 
         return data
-    except Exception:
+    except Exception as e:
+        print(f"⚠️ 加载缓存失败: {e}")
         return None
 
 

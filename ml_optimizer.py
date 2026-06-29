@@ -16,13 +16,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import pickle
 
-# 交易记录文件
-TRADE_LOG = Path(
-    "/root/.hermes/profiles/life/home/.hermes/polymarket_bot/logs/polystrat_trades.json"
-)
-MODEL_CACHE = Path(
-    "/root/.hermes/profiles/life/home/.hermes/polymarket_bot/logs/ml_model.pkl"
-)
+from config_center import TRADE_LOG, ML_MODEL_PATH as MODEL_CACHE
 
 # 模型配置
 MODELS = {
@@ -134,7 +128,7 @@ def extract_features(trades):
                     dt = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
                 days_left = (dt - datetime.now(timezone.utc)).days
                 time_to_expiry = max(0, min(365, days_left)) / 365  # 归一化到 0-1
-            except:
+            except (ValueError, TypeError):
                 time_to_expiry = 0
 
         # 获取市场分类
@@ -153,7 +147,7 @@ def extract_features(trades):
         # 获取微观结构信号（如果存在）
         microstructure_signal = trade.get("microstructure_signal", {})
         microstructure_confidence = microstructure_signal.get("confidence", 0.3)
-        microstructure_buy = 1 if microstructure_signal.get("recommendation") == "buy" else 0
+        microstructure_buy = 1 if microstructure_signal.get("recommendation") in ["buy", "strong_buy"] else 0
 
         # 只使用交易时可获取的市场信息作为特征（不包含决策输出）
         feature = [
@@ -399,8 +393,8 @@ def optimize_with_ml():
                             "weight": model_config["weight"],
                             "name": model_config["name"],
                         }
-                except:
-                    pass
+                except Exception as e:
+                    print(f"⚠️ CV模型训练失败 ({model_key}): {e}")
 
             if not cv_models:
                 continue
@@ -416,8 +410,8 @@ def optimize_with_ml():
                     p = mi["model"].predict_proba(test_feature_scaled)[0][1]
                     preds.append(p * mi["weight"])
                     total_w += mi["weight"]
-                except:
-                    pass
+                except Exception as e:
+                    print(f"⚠️ CV模型预测失败 ({mk}): {e}")
 
             ml_prob = sum(preds) / total_w if total_w > 0 else 0.5
             actual = labels[i]
@@ -513,7 +507,7 @@ def get_ml_signal(llm_prob, sentiment_score, edge, market_price, direction,
     if microstructure_signal is None:
         microstructure_signal = {}
     microstructure_confidence = microstructure_signal.get("confidence", 0.3)
-    microstructure_buy = 1 if microstructure_signal.get("recommendation") == "buy" else 0
+    microstructure_buy = 1 if microstructure_signal.get("recommendation") in ["buy", "strong_buy"] else 0
 
     # 市场分类编码
     category_encoding = {

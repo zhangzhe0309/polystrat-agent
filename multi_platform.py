@@ -51,7 +51,8 @@ def fetch_polymarket_markets(limit=10):
                 try:
                     price_list = json.loads(prices) if isinstance(prices, str) else prices
                     yes_price = float(price_list[0]) if price_list else 0.5
-                except Exception:
+                except (json.JSONDecodeError, ValueError, TypeError) as e:
+                    print(f"⚠️ Polymarket价格解析失败: {e}")
                     yes_price = 0.5
                 
                 result.append({

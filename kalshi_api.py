@@ -17,7 +17,7 @@ from retry_helper import retry_request
 KALSHI_API = "https://external-api.kalshi.com/trade-api/v2"
 
 # 缓存目录
-CACHE_DIR = Path("/root/.hermes/profiles/life/data/kalshi_cache")
+from config_center import KALSHI_CACHE_DIR as CACHE_DIR
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 def get_markets(series_ticker=None, status="open", limit=20):
@@ -139,7 +139,7 @@ def format_market(market):
     if close_time:
         try:
             close_dt = datetime.fromisoformat(close_time.replace("Z", "+00:00"))
-        except:
+        except (ValueError, AttributeError):
             close_dt = None
     else:
         close_dt = None

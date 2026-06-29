@@ -11,7 +11,7 @@ from pathlib import Path
 from polystrat_logger import log, log_error
 
 # 告警日志文件
-ALERT_LOG = Path("/root/.hermes/profiles/life/home/.hermes/polymarket_bot/logs/alerts.json")
+from config_center import ALERT_LOG
 ALERT_LOG.parent.mkdir(parents=True, exist_ok=True)
 
 # 告警配置

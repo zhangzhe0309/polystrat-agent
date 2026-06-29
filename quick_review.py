@@ -21,7 +21,7 @@ def count_lines(file_path):
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             return len(f.readlines())
-    except:
+    except (OSError, IOError, UnicodeDecodeError):
         return 0
 
 def check_imports(file_path):
@@ -34,7 +34,7 @@ def check_imports(file_path):
                 if line.strip().startswith('import ') or line.strip().startswith('from '):
                     imports.append(line.strip())
             return imports
-    except:
+    except (OSError, IOError, UnicodeDecodeError):
         return []
 
 def check_bare_except(file_path):
@@ -44,7 +44,7 @@ def check_bare_except(file_path):
             content = f.read()
             count = content.count('except:')
             return count
-    except:
+    except (OSError, IOError, UnicodeDecodeError):
         return 0
 
 def check_hardcoded_keys(file_path):
@@ -59,7 +59,7 @@ def check_hardcoded_keys(file_path):
                 if pattern in content:
                     found.append(pattern)
             return found
-    except:
+    except (OSError, IOError, UnicodeDecodeError):
         return []
 
 def run_review():

@@ -22,7 +22,8 @@ def _get(url, retries=2):
             if e.code == 429:
                 time.sleep(1); continue
             return None
-        except Exception:
+        except (URLError, socket.timeout) as e:
+            print(f"⚠️ API请求失败: {e}")
             return None
     return None
 
@@ -70,7 +71,7 @@ def scan():
                         prices_str = "⏳ 待开盘"
                     else:
                         prices_str = f"YES ${yes_p:.0f}¢ / NO ${no_p:.0f}¢"
-            except:
+            except (json.JSONDecodeError, ValueError, IndexError, TypeError):
                 prices_str = ""
         
         v_str = f" | 24hVol: ${vol24h:,.0f}" if vol24h > 0 else ""
@@ -89,7 +90,7 @@ def scan():
             try:
                 pp = json.loads(raw_prices) if isinstance(raw_prices, str) else raw_prices
                 ps = " → ".join([f"${float(v)*100:.0f}¢" for v in pp]) if pp else ""
-            except:
+            except (json.JSONDecodeError, ValueError, TypeError):
                 ps = ""
             vol = float(m.get("volume",0) or 0)
             bid = m.get("bestBid","N/A")

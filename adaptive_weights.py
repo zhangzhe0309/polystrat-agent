@@ -13,10 +13,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from collections import defaultdict
 
-# 交易记录文件
-TRADE_LOG = Path(
-    "/root/.hermes/profiles/life/home/.hermes/polymarket_bot/logs/polystrat_trades.json"
-)
+from config_center import TRADE_LOG
 
 # 权重调整参数
 WEIGHT_ADJUSTMENT_RATE = 0.05  # 每次调整幅度
@@ -142,7 +139,8 @@ def get_recent_trades(trades, days=ROLLING_WINDOW_DAYS):
                 dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
                 if dt >= cutoff:
                     recent.append(trade)
-        except Exception:
+        except Exception as e:
+            print(f"⚠️ 交易时间戳解析失败: {e}")
             continue
 
     return recent
@@ -247,14 +245,14 @@ def calculate_adaptive_weights(trades):
     else:
         edge_threshold = 0.04
 
-    # 自适应情感映射斜率（无数据时用默认 0.35）
+    # 自适应情感映射斜率（无数据时用默认 0.40）
     sentiment_accuracy = sent_acc if sent_acc is not None else 0.5
     if sentiment_accuracy > 0.6:
-        sentiment_mapping_slope = 0.45
+        sentiment_mapping_slope = 0.55
     elif sentiment_accuracy < 0.4:
         sentiment_mapping_slope = 0.25
     else:
-        sentiment_mapping_slope = 0.35
+        sentiment_mapping_slope = 0.40
 
     # 自适应链上信号乘数
     onchain_accuracy = onch_acc if onch_acc is not None else 0.5

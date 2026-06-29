@@ -144,7 +144,7 @@ class TakeProfitManager:
         self.exit_history: List[dict] = []
         
         # 持久化
-        self.data_dir = Path(data_dir) if data_dir else Path("/root/.hermes/profiles/life/data/tp_manager")
+        from config_center import TP_MANAGER_DIR; self.data_dir = Path(data_dir) if data_dir else TP_MANAGER_DIR
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._load_state()
     
@@ -401,8 +401,8 @@ class TakeProfitManager:
             filepath = self.data_dir / "tp_state.json"
             with open(filepath, "w") as f:
                 json.dump(state, f, indent=2)
-        except Exception:
-            pass
+        except (OSError, IOError) as e:
+            print(f"⚠️ TP状态保存失败: {e}")
     
     def _load_state(self):
         """加载状态"""
@@ -433,8 +433,8 @@ class TakeProfitManager:
                     opened_at=datetime.fromisoformat(p_data["opened_at"]) if p_data.get("opened_at") else datetime.now(timezone.utc),
                 )
                 self.positions[pid] = position
-        except Exception:
-            pass
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"⚠️ TP状态加载失败: {e}")
 
 
 if __name__ == "__main__":

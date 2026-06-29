@@ -17,7 +17,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # 加载 .env 文件
-load_dotenv("/root/.hermes/profiles/life/.env")
+from config_center import ENV_FILE; load_dotenv(ENV_FILE)
 
 # API Keys (从环境变量读取，不再硬编码)
 GNEWS_API_KEY = os.environ.get("GNEWS_API_KEY", "")
@@ -343,7 +343,8 @@ def search_rss(query, max_results=5):
             url = feed_url.format(query=query)
             news = parse_rss_feed(url, per_search_feed, feed_name=feed_key)
             all_news.extend(news)
-        except Exception:
+        except Exception as e:
+            print(f"⚠️ RSS搜索失败 ({feed_key}): {e}")
             continue
 
     # 搜索固定源（补充）
@@ -352,7 +353,8 @@ def search_rss(query, max_results=5):
         try:
             news = parse_rss_feed(feed_url, per_static_feed, feed_name=feed_key)
             all_news.extend(news)
-        except Exception:
+        except Exception as e:
+            print(f"⚠️ 静态RSS源失败 ({feed_key}): {e}")
             continue
 
     # 按发布时间排序（最新的在前）
@@ -364,12 +366,13 @@ def _serpapi_available():
     """检查 SerpAPI 今日是否还有可用配额（每天最多1次）"""
     import json
     from datetime import datetime, timezone
+    from config_center import SERPAPI_USAGE_FILE
 
-    usage_file = "/root/.hermes/profiles/life/data/serpapi_usage.json"
+    usage_file = SERPAPI_USAGE_FILE
     try:
         with open(usage_file, "r") as f:
             usage = json.load(f)
-    except Exception:
+    except (json.JSONDecodeError, OSError):
         return True
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if usage.get("last_used") == today and usage.get("daily_count", 0) >= 1:
@@ -394,7 +397,7 @@ def search_news_for_market(market_title, max_results=5, use_cache=True):
     keywords = re.sub(r"\(.*?\)", "", market_title).replace("?", "").strip()[:60]
 
     # === 缓存机制 ===
-    cache_dir = Path("/root/.hermes/profiles/life/data/news_cache")
+    from config_center import NEWS_CACHE_DIR as cache_dir
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_key = hashlib.md5(keywords.encode()).hexdigest()
     cache_file = cache_dir / f"{cache_key}.json"
@@ -405,8 +408,8 @@ def search_news_for_market(market_title, max_results=5, use_cache=True):
             cached_at = datetime.fromisoformat(cache_data.get("cached_at", ""))
             if datetime.now(timezone.utc) - cached_at < timedelta(hours=1):
                 return cache_data.get("news", [])[: max_results * 2]
-        except Exception:
-            pass
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"⚠️ 新闻缓存读取失败: {e}")
 
     # === 并行请求 ===
     def safe_call(func, query, limit):
@@ -436,10 +439,9 @@ def search_news_for_market(market_title, max_results=5, use_cache=True):
                 result = future.result(timeout=15)
                 if result:
                     all_news.extend(result)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"⚠️ 并发搜索任务失败: {e}")
     finally:
-        # 防止挂起线程阻塞主流程（wait=False 不等待，cancel_futures 取消未完成）
         executor.shutdown(wait=False, cancel_futures=True)
 
     # 去重（按标题）
@@ -488,10 +490,11 @@ def search_news_for_market(market_title, max_results=5, use_cache=True):
         tmp = cache_file.with_suffix(f".tmp.{os.getpid()}")
         tmp.write_text(json.dumps(cache_data, ensure_ascii=False))
         tmp.rename(cache_file)
-    except Exception:
+    except OSError as e:
+        print(f"⚠️ 新闻缓存写入失败: {e}")
         try:
             tmp.unlink(missing_ok=True)
-        except Exception:
+        except OSError:
             pass
 
     return final_results
@@ -504,14 +507,14 @@ def search_serpapi(query, max_results=5):
     """
     import json
     from datetime import datetime, timezone
+    from config_center import SERPAPI_USAGE_FILE
 
-    usage_file = "/root/.hermes/profiles/life/data/serpapi_usage.json"
+    usage_file = SERPAPI_USAGE_FILE
 
-    # 检查使用次数
     try:
         with open(usage_file, "r") as f:
             usage = json.load(f)
-    except Exception:
+    except (json.JSONDecodeError, OSError):
         usage = {"last_used": "", "daily_count": 0}
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")

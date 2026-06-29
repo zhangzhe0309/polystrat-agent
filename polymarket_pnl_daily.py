@@ -12,8 +12,7 @@ import sys
 from datetime import datetime, timezone
 
 # ============ 配置区 ============
-SETTLEMENT_LOG = "/root/.hermes/profiles/life/home/.hermes/polymarket_bot/logs/settlement_log.json"
-DAILY_REPORT_FILE = "/root/.hermes/profiles/life/home/.hermes/polymarket_bot/logs/daily_pnl_simple.json"
+from config_center import SETTLEMENT_LOG, DAILY_REPORT_FILE
 
 # ============ 主逻辑 ============
 

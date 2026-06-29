@@ -13,8 +13,7 @@ from pathlib import Path
 from polystrat_logger import log, log_error
 
 # Polymarket API 配置
-GAMMA_API = "https://gamma-api.polymarket.com"
-CLOB_API = "https://clob.polymarket.com"
+from config_center import GAMMA_API, CLOB_API
 DATA_API = "https://data-api.polymarket.com"
 
 # 交易配置
@@ -224,7 +223,8 @@ def scan_markets(category=None, min_price=0.03, max_price=0.97, min_volume=10000
                     import json as _json
                     price_list = _json.loads(prices) if isinstance(prices, str) else prices
                     yes_price = float(price_list[0])
-                except Exception:
+                except (json.JSONDecodeError, ValueError, TypeError) as e:
+                    print(f"⚠️ 市场价格解析失败: {e}")
                     continue
                 
                 volume = float(m.get("volume", 0))

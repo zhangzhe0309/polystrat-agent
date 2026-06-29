@@ -13,7 +13,7 @@ from pathlib import Path
 from datetime import datetime
 
 # 日志目录
-LOG_DIR = Path("/root/.hermes/profiles/life/home/.hermes/polymarket_bot/logs")
+from config_center import LOG_DIR
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # 日志文件

@@ -50,15 +50,15 @@ def atomic_write_json(file_path, data):
             # 原子重命名（在同一文件系统上是原子操作）
             os.rename(tmp_path, str(file_path))
             
-        except Exception:
-            # 清理临时文件
+        except Exception as e:
+            print(f"⚠️ 原子写入失败: {e}")
             try:
                 os.close(tmp_fd)
-            except:
+            except OSError:
                 pass
             try:
                 os.unlink(tmp_path)
-            except:
+            except OSError:
                 pass
             raise
         
@@ -160,17 +160,17 @@ def append_to_json_array(file_path, new_item):
 # 便捷函数
 def save_trades_safe(trades):
     """安全保存交易记录"""
-    TRADE_LOG = Path("/root/.hermes/profiles/life/home/.hermes/polymarket_bot/logs/polystrat_trades.json")
+    from config_center import TRADE_LOG
     atomic_write_json(TRADE_LOG, trades)
 
 def load_trades_safe():
     """安全加载交易记录"""
-    TRADE_LOG = Path("/root/.hermes/profiles/life/home/.hermes/polymarket_bot/logs/polystrat_trades.json")
+    from config_center import TRADE_LOG
     return atomic_read_json(TRADE_LOG, default=[])
 
 def append_trade_safe(trade_info):
     """安全追加交易记录"""
-    TRADE_LOG = Path("/root/.hermes/profiles/life/home/.hermes/polymarket_bot/logs/polystrat_trades.json")
+    from config_center import TRADE_LOG
     append_to_json_array(TRADE_LOG, trade_info)
 
 

@@ -24,7 +24,7 @@ core_files = [
 
 code_summary = []
 for fname in core_files:
-    path = f'/root/.hermes/profiles/life/scripts/{fname}'
+    from config_center import SCRIPTS_DIR; path = str(SCRIPTS_DIR / fname)
     if os.path.exists(path):
         with open(path, 'r') as f:
             content = f.read()

@@ -20,10 +20,7 @@ MAX_TOTAL_POSITION = 0.30  # 总仓位最大30%
 MAX_SAME_CATEGORY = 0.20  # 同一类别最大20%
 MAX_SAME_MARKET = 0.10  # 同一市场最大10%
 
-# 交易记录文件
-TRADE_LOG = (
-    "/root/.hermes/profiles/life/home/.hermes/polymarket_bot/logs/polystrat_trades.json"
-)
+from config_center import TRADE_LOG
 
 
 def set_trade_log_path(path):
@@ -209,8 +206,8 @@ def calculate_risk_score(market, confidence, news_sentiment=0):
                 risk_score += 0.3  # 临近到期风险更高
             elif days_left < 30:
                 risk_score += 0.1
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"⚠️ 风险评分到期日计算失败: {e}")
 
     # 4. 新闻情感风险
     if abs(news_sentiment) > 0.5:

@@ -14,7 +14,7 @@ from polystrat_logger import log, log_error
 from retry_helper import retry_request
 
 # 缓存目录
-CACHE_DIR = Path("/root/.hermes/profiles/life/data/onchain_cache")
+from config_center import ONCHAIN_CACHE_DIR as CACHE_DIR
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # API 配置

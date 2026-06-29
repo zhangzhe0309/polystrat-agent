@@ -28,7 +28,7 @@ load_dotenv()  # 也加载项目目录的 .env（如果有）
 # 导入自定义模块
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from news_search import search_news_for_market
-from sentiment_analysis import analyze_news_sentiment, analyze_sentiment_simple
+from sentiment_analysis import analyze_news_sentiment
 from risk_management import should_trade, calculate_position_size, get_risk_report, set_trade_log_path as set_risk_log_path
 from onchain_monitor import get_onchain_signal
 from adaptive_weights import calculate_adaptive_weights, load_trade_history, set_trade_log_path as set_adaptive_log_path
@@ -158,11 +158,10 @@ assert abs(sum(SIGNAL_WEIGHTS.values()) - 1.0) < 1e-6, "权重总和必须为1.0
 LLM_WEIGHT = SIGNAL_WEIGHTS["llm"]
 NEWS_WEIGHT = SIGNAL_WEIGHTS["sentiment"]
 
-GAMMA_API = "https://gamma-api.polymarket.com"
-CLOB_API = "https://clob.polymarket.com"
+from config_center import GAMMA_API, CLOB_API
 
 # 日志目录
-LOG_DIR = Path("/root/.hermes/profiles/life/home/.hermes/polymarket_bot/logs")
+from config_center import LOG_DIR
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 TRADE_LOG = (
     LOG_DIR / "polystrat_trades_dryrun.json"
@@ -216,7 +215,8 @@ def fetch_active_markets(limit=50):
                 if len(price_list) < 1:
                     continue
                 yes_price = float(price_list[0])
-            except Exception:
+            except Exception as e:
+                print(f"⚠️ 价格解析失败: {e}")
                 continue
 
             # 跳过极端价格（>97¢ 或 <3¢）- 扩大范围
@@ -229,7 +229,8 @@ def fetch_active_markets(limit=50):
                     token_list = json.loads(tokens)
                 else:
                     token_list = tokens
-            except Exception:
+            except Exception as e:
+                print(f"⚠️ Token解析失败: {e}")
                 token_list = []
 
             # 解析 outcomes
@@ -238,7 +239,8 @@ def fetch_active_markets(limit=50):
                     outcome_list = json.loads(outcomes)
                 else:
                     outcome_list = outcomes
-            except Exception:
+            except Exception as e:
+                print(f"⚠️ Outcomes解析失败: {e}")
                 outcome_list = ["Yes", "No"]
 
             # 检测市场分类（扩展分类）
@@ -419,7 +421,8 @@ def search_news(query, max_results=3):
         # 取前 2000 字符作为上下文
         context = clean[:2000]
         return context
-    except Exception:
+    except Exception as e:
+        print(f"⚠️ 新闻提取失败: {e}")
         return ""
 
 
@@ -494,8 +497,9 @@ def llm_analyze_probability(
                     if 0 <= prob <= 100:
                         predictions_dict[provider["name"]] = prob
                         model_results.append(f"{provider['name']}:{prob}¢")
-                break  # 成功，不再重试
-            except Exception:
+                break
+            except Exception as e:
+                print(f"⚠️ LLM调用失败 ({provider['name']}): {e}")
                 if attempt < 1:
                     time.sleep(1)
                     continue
@@ -508,7 +512,8 @@ def llm_analyze_probability(
             from dynamic_optimizer import calculate_llm_model_weights
 
             model_weights = calculate_llm_model_weights()
-        except Exception:
+        except Exception as e:
+            print(f"⚠️ 模型权重计算失败: {e}")
             model_weights = None
 
         voting_system = create_voting_system(model_weights=model_weights)
@@ -691,8 +696,8 @@ def format_output(decisions, edge_threshold=None):
                 dt = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
                 days_left = (dt - datetime.now(timezone.utc)).days
                 lines.append(f"   结算: {dt.strftime('%Y-%m-%d')} | 剩余{days_left}天")
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"⚠️ 结算日解析失败: {e}")
 
         if abs(edge) >= effective_threshold and trades_made < MAX_TRADES_PER_RUN:
             result = d.get("order_result")
@@ -797,8 +802,8 @@ def main():
                 else:
                     # 兼容旧记录：无 condition_id 时用 title 小写去重
                     traded_markets_24h.add(t.get("market", "").lower())
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"⚠️ 交易历史加载失败: {e}")
 
     # 使用自适应权重（包含4信号 + 动态阈值）
     llm_weight = adaptive_weights.get("llm_weight", SIGNAL_WEIGHTS["llm"])
@@ -836,7 +841,7 @@ def main():
     )
     print(f"   优势阈值: {edge_threshold:.2%} | 套利信号: {ARBITRAGE_WEIGHT:.0%} | 微观结构: {MICROSTRUCTURE_WEIGHT:.0%}")
     print(
-        f"   情感斜率: {adaptive_weights.get('sentiment_mapping_slope', 0.35):.2f} | 链上乘数: {adaptive_weights.get('onchain_multiplier', 1.0):.2f}"
+        f"   情感斜率: {adaptive_weights.get('sentiment_mapping_slope', 0.40):.2f} | 链上乘数: {adaptive_weights.get('onchain_multiplier', 1.0):.2f}"
     )
     print(f"   样本大小: {adaptive_weights.get('sample_size', 0)}")
     print()
@@ -876,6 +881,9 @@ def main():
         category = market.get("category", "Other")
         liquidity = market.get("liquidity", 0)
         condition_id = market.get("condition_id", "")  # 唯一标识，用于去重
+
+        # 初始化所有信号的默认值（防止 NameError）
+        microstructure_signal = {"recommendation": "hold", "confidence": 0.3}
 
         # 甜蜜点模式：聚焦高胜率区间
         if SWEET_SPOT_MODE:
@@ -941,23 +949,17 @@ def main():
             news_text = ""
             print(f"⚠️ 新闻搜索失败: {e}")
 
-        # 3. 情感分析（简化版，使用关键词分析，避免LLM超时）
+        # 3. 情感分析（LLM优先 + 关键词降级，置信度加权聚合）
         try:
-            # 使用简单情感分析（快速）
-            from sentiment_analysis import analyze_sentiment_simple
-
             if news_list:
-                sentiment_scores = []
-                for news in news_list[:2]:
-                    text = news.get("title", "") + " " + news.get("description", "")
-                    result = analyze_sentiment_simple(text)
-                    sentiment_scores.append(result["score"])
-                sentiment_score = (
-                    sum(sentiment_scores) / len(sentiment_scores)
-                    if sentiment_scores
-                    else 0
+                # 使用 analyze_news_sentiment：LLM优先，低置信度自动降级为关键词
+                # 分析更多新闻（最多5条），保留真实置信度
+                analysis_limit = min(len(news_list), 5)
+                sentiment_result = analyze_news_sentiment(
+                    news_list[:analysis_limit], market_context=title
                 )
-                sentiment_confidence = 0.5
+                sentiment_score = sentiment_result["overall_score"]
+                sentiment_confidence = sentiment_result["confidence"]
             else:
                 sentiment_score = 0
                 sentiment_confidence = 0
@@ -1036,7 +1038,7 @@ def main():
                 else:
                     dt = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
                 time_to_expiry = max(0, (dt - datetime.now(timezone.utc)).days)
-            except:
+            except (ValueError, TypeError):
                 time_to_expiry = 0
 
         try:
@@ -1078,9 +1080,10 @@ def main():
 
         # 信号2: 情感概率（将 sentiment_score 转换为概率）
         # 使用自适应映射斜率（基于情感信号历史准确率）
-        sentiment_mapping_slope = adaptive_weights.get("sentiment_mapping_slope", 0.35)
+        sentiment_mapping_slope = adaptive_weights.get("sentiment_mapping_slope", 0.40)
         sentiment_signal_prob = 0.5 + sentiment_score * sentiment_mapping_slope
-        sentiment_signal_prob = max(0.15, min(0.85, sentiment_signal_prob))
+        # 放宽截断范围，允许情感信号产生更强影响
+        sentiment_signal_prob = max(0.10, min(0.90, sentiment_signal_prob))
         if sentiment_score == 0 and sentiment_confidence == 0:
             signal_fallbacks += 1  # 情感信号完全回退
 
@@ -1181,8 +1184,8 @@ def main():
         if not token_id:
             continue
 
-        # 7. 风险检查（使用投票置信度，而非情感置信度）
-        voting_confidence = vote_details.get("confidence", sentiment_confidence)
+        # 7. 风险检查（使用投票置信度，默认中性值 0.5）
+        voting_confidence = vote_details.get("confidence", 0.5)
         should_trade_flag, risk_reason = should_trade(
             market,
             confidence=voting_confidence,

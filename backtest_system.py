@@ -11,7 +11,7 @@ from pathlib import Path
 from polystrat_logger import log, log_error
 
 # 交易记录文件
-TRADE_LOG = Path("/root/.hermes/profiles/life/home/.hermes/polymarket_bot/logs/polystrat_trades.json")
+from config_center import TRADE_LOG
 
 def load_trade_history():
     """加载交易历史"""
@@ -154,7 +154,7 @@ def analyze_by_time(trades):
                 if date_str not in daily:
                     daily[date_str] = []
                 daily[date_str].append(trade)
-            except:
+            except (ValueError, TypeError):
                 pass
     
     results = {}

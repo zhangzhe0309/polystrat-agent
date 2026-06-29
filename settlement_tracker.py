@@ -12,11 +12,8 @@ from pathlib import Path
 from polystrat_logger import log, log_error
 from safe_file_ops import atomic_read_json, atomic_write_json
 
-# 交易记录文件
-TRADE_LOG = Path(
-    "/root/.hermes/profiles/life/home/.hermes/polymarket_bot/logs/polystrat_trades.json"
-)
-GAMMA_API = "https://gamma-api.polymarket.com"
+from config_center import TRADE_LOG
+from config_center import GAMMA_API
 
 # 结算超时阈值（天）- 超过此时间未结算的市场标记为超时
 SETTLEMENT_TIMEOUT_DAYS = 30
@@ -78,7 +75,7 @@ def check_market_batch(condition_ids):
                                 if isinstance(outcome_prices, str):
                                     try:
                                         prices = json.loads(outcome_prices)
-                                    except Exception:
+                                    except (json.JSONDecodeError, TypeError):
                                         prices = []
                                 else:
                                     prices = outcome_prices
@@ -209,7 +206,8 @@ def check_timeout_trades(trades):
                 updated += 1
                 log.warning(f"超时: {trade.get('market', '')[:40]}")
 
-        except Exception:
+        except Exception as e:
+            print(f"⚠️ 超时检查失败: {e}")
             continue
 
     if updated > 0:

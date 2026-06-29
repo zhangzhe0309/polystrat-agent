@@ -21,7 +21,7 @@ WALLET_ADDRESSES = [
 ]
 MONITOR_WINDOW_HOURS = 2  # 监控过去 2 小时
 DATA_API = "https://data-api.polymarket.com"
-SEEN_FILE = "/root/.hermes/profiles/life/home/.hermes/whale_watch/seen_trades.json"
+from config_center import WHALE_WATCH_SEEN as SEEN_FILE
 
 # 中文翻译（简化版）
 TEAM_CN = {
@@ -54,7 +54,7 @@ def load_seen():
         # 删除 12 小时前的记录
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=12)).isoformat()
         return {k: v for k, v in data.items() if v.get("ts", "") > cutoff}
-    except:
+    except (json.JSONDecodeError, OSError, IOError):
         return {}
 
 def save_seen(data):
@@ -86,7 +86,7 @@ def get_recent_buys(address, cutoff_time):
                 else:
                     try:
                         dt = datetime.fromisoformat(str(ts).replace('Z', '+00:00'))
-                    except:
+                    except (ValueError, TypeError):
                         continue
                 if dt < cutoff_time:
                     continue

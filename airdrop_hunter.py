@@ -13,7 +13,7 @@ from pathlib import Path
 from polystrat_logger import log, log_error
 
 # 缓存目录
-CACHE_DIR = Path("/root/.hermes/profiles/life/data/airdrop_cache")
+from config_center import AIRDROP_CACHE_DIR as CACHE_DIR
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # 已知空投数据源（只使用可用的公开 API）

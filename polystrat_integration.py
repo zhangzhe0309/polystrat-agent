@@ -66,7 +66,7 @@ from negrisk_arbitrage import NegRiskArbitrageDetector, scan_negrisk_arbitrage
 # ── 常量 ──────────────────────────────────────────────────────────
 
 DATA_API = "https://data-api.polymarket.com"
-GAMMA_API = "https://gamma-api.polymarket.com"
+from config_center import GAMMA_API
 POLL_INTERVAL_S = 10
 
 # 跟单配置 (从 KongTradeBot 迁移)
@@ -102,7 +102,7 @@ class PolyStratIntegration:
     
     def __init__(self, config: dict = None):
         self.config = config or COPY_CONFIG
-        self.data_dir = Path("/root/.hermes/profiles/life/data/polystrat")
+        from config_center import POLYSTRAT_DIR; self.data_dir = POLYSTRAT_DIR
         self.data_dir.mkdir(parents=True, exist_ok=True)
         
         # 组件初始化

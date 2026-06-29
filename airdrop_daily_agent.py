@@ -12,7 +12,7 @@ import os
 def main():
     # 调用 hermes agent 执行提示词
     # 使用单查询模式
-    prompt_file = "/root/.hermes/profiles/life/scripts/airdrop_daily_prompt.py"
+    from config_center import SCRIPTS_DIR; prompt_file = str(SCRIPTS_DIR / "airdrop_daily_prompt.py")
     
     # 读取提示词
     with open(prompt_file, 'r') as f:

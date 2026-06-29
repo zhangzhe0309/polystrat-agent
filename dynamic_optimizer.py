@@ -15,13 +15,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from collections import defaultdict
 
-# 交易记录文件
-TRADE_LOG = Path(
-    "/root/.hermes/profiles/life/home/.hermes/polymarket_bot/logs/polystrat_trades.json"
-)
-
-# 优化配置文件
-OPTIMIZATION_CONFIG = Path("/root/.hermes/profiles/life/data/optimization_config.json")
+from config_center import TRADE_LOG, OPTIMIZATION_CONFIG
 
 # 默认配置
 DEFAULT_CONFIG = {
@@ -52,8 +46,8 @@ def load_optimization_config():
         if OPTIMIZATION_CONFIG.exists():
             with open(OPTIMIZATION_CONFIG) as f:
                 return json.load(f)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"⚠️ 加载优化配置失败: {e}")
     return DEFAULT_CONFIG.copy()
 
 
@@ -85,7 +79,8 @@ def get_recent_trades(days=7):
                 dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                 if dt >= cutoff:
                     recent.append(t)
-        except Exception:
+        except Exception as e:
+            print(f"⚠️ 交易时间戳过滤失败: {e}")
             continue
     return recent
 
@@ -130,7 +125,8 @@ def calculate_llm_model_weights(trades=None, window_days=7):
                 model_name = parts[0].strip()
                 try:
                     pred_prob = int(parts[1].replace("¢", "").strip()) / 100
-                except Exception:
+                except (ValueError, IndexError) as e:
+                    print(f"⚠️ 模型预测概率解析失败: {e}")
                     continue
 
                 # 判断预测是否正确
@@ -376,7 +372,8 @@ def get_dynamic_dedup_hours(end_date_str):
             return 48  # 远期市场，增加去重窗口
         else:
             return 24  # 正常
-    except Exception:
+    except Exception as e:
+        print(f"⚠️ 去重窗口计算失败: {e}")
         return 24
 
 

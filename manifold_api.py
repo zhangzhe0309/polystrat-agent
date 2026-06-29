@@ -18,7 +18,7 @@ MANIFOLD_API = "https://api.manifold.markets/v0"
 MANIFOLD_API_KEY = os.environ.get("MANIFOLD_API_KEY", "")  # 可选，用于写入操作
 
 # 缓存目录
-CACHE_DIR = Path("/root/.hermes/profiles/life/data/manifold_cache")
+from config_center import MANIFOLD_CACHE_DIR as CACHE_DIR
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 def get_popular_markets(limit=20, sort="liquidity"):

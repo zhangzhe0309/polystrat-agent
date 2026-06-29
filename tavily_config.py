@@ -27,7 +27,7 @@ def get_working_key():
             )
             if resp.status_code == 200:
                 return key
-        except:
+        except (requests.RequestException, ValueError, KeyError):
             continue
     
     return TAVILY_KEYS[0]  # 默认返回第一个

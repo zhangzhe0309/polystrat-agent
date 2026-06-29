@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # 交易记录文件
-TRADE_LOG = Path("/root/.hermes/profiles/life/home/.hermes/polymarket_bot/logs/polystrat_trades.json")
+from config_center import TRADE_LOG
 
 def load_trade_history():
     """加载交易历史（使用安全文件操作）"""

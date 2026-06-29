@@ -12,8 +12,7 @@ from pathlib import Path
 from polystrat_logger import log, log_error
 
 # Polymarket V2 API 配置
-GAMMA_API = "https://gamma-api.polymarket.com"
-CLOB_API = "https://clob.polymarket.com"  # V2 生产环境
+from config_center import GAMMA_API, CLOB_API
 DATA_API = "https://data-api.polymarket.com"
 
 # V2 交易配置
@@ -190,7 +189,7 @@ def scan_markets_v2(category=None, min_price=0.03, max_price=0.97, min_volume=10
                 try:
                     price_list = json.loads(prices) if isinstance(prices, str) else prices
                     yes_price = float(price_list[0])
-                except:
+                except (json.JSONDecodeError, ValueError, IndexError, TypeError):
                     continue
                 
                 volume = float(m.get("volume", 0))

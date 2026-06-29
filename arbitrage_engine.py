@@ -14,8 +14,7 @@ from datetime import datetime, timezone
 from polystrat_logger import log, log_error
 
 # Polymarket API
-GAMMA_API = "https://gamma-api.polymarket.com"
-CLOB_API = "https://clob.polymarket.com"
+from config_center import GAMMA_API, CLOB_API
 
 # 套利配置
 ARBITRAGE_CONFIG = {
@@ -236,7 +235,8 @@ def scan_binary_markets(limit=50):
             try:
                 token_list = json.loads(tokens) if isinstance(tokens, str) else tokens
                 outcome_list = json.loads(outcomes) if isinstance(outcomes, str) else outcomes
-            except Exception:
+            except Exception as e:
+                print(f"⚠️ 套利Token/Outcomes解析失败: {e}")
                 continue
 
             if len(token_list) != 2 or len(outcome_list) != 2:
@@ -247,7 +247,8 @@ def scan_binary_markets(limit=50):
             try:
                 price_list = json.loads(prices) if isinstance(prices, str) else prices
                 yes_price = float(price_list[0])
-            except Exception:
+            except Exception as e:
+                print(f"⚠️ 套利价格解析失败: {e}")
                 continue
 
             if yes_price < 0.05 or yes_price > 0.95:
@@ -314,10 +315,11 @@ def scan_negrisk_groups(limit=100):
 
             for market in event_markets:
                 tokens = market.get("clobTokenIds", "")
-                try:
-                    token_list = json.loads(tokens) if isinstance(tokens, str) else tokens
-                except Exception:
-                    continue
+            try:
+                token_list = json.loads(tokens) if isinstance(tokens, str) else tokens
+            except Exception as e:
+                print(f"⚠️ 多结果Token解析失败: {e}")
+                continue
 
                 if not token_list:
                     continue
@@ -327,7 +329,8 @@ def scan_negrisk_groups(limit=100):
                 try:
                     price_list = json.loads(prices) if isinstance(prices, str) else prices
                     yes_price = float(price_list[0]) if price_list else 0
-                except Exception:
+                except Exception as e:
+                    print(f"⚠️ 多结果价格解析失败: {e}")
                     continue
 
                 # 跳过零价格和极低价格市场（未激活/无流动性）

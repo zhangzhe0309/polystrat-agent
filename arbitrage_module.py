@@ -17,7 +17,7 @@ from manifold_api import get_popular_markets as get_manifold_markets, search_mar
 from polymarket_api import get_active_markets as get_polymarket_markets  # 假设已存在
 
 # 缓存目录
-CACHE_DIR = Path("/root/.hermes/profiles/life/data/arbitrage_cache")
+from config_center import ARBITRAGE_CACHE_DIR as CACHE_DIR
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 def normalize_title(title):

@@ -14,7 +14,7 @@ from collections import defaultdict
 from polystrat_logger import log
 
 # 性能日志文件
-PERF_LOG = Path("/root/.hermes/profiles/life/home/.hermes/polymarket_bot/logs/performance.json")
+from config_center import PERF_LOG
 
 class RateLimiter:
     """

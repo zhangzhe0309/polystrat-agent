@@ -14,10 +14,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # Polymarket API
-GAMMA_API = "https://gamma-api.polymarket.com"
+from config_center import GAMMA_API
 
 # 历史快照目录
-VOLUME_CACHE_DIR = Path("/root/.hermes/profiles/life/data/volume_cache")
+from config_center import VOLUME_CACHE_DIR
 
 
 def get_market_volume(market_slug):
@@ -96,7 +96,8 @@ def get_trending_markets(limit=10):
                         else:
                             prices = prices_str
                         yes_price = float(prices[0]) if prices else 0.5
-                    except Exception:
+                    except (json.JSONDecodeError, ValueError, TypeError) as e:
+                        print(f"⚠️ 热门市场价格解析失败: {e}")
                         yes_price = 0.5
 
                     trending.append(
@@ -125,7 +126,8 @@ def _load_volume_snapshot(market_slug):
     if cache_file.exists():
         try:
             return json.loads(cache_file.read_text())
-        except Exception:
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"⚠️ 交易量快照加载失败: {e}")
             return None
     return None
 
@@ -144,8 +146,8 @@ def _save_volume_snapshot(market_slug, volume, liquidity):
                 }
             )
         )
-    except Exception:
-        pass
+    except OSError as e:
+        print(f"⚠️ 交易量快照保存失败: {e}")
 
 
 def analyze_volume_change(market_slug, hours=24):
@@ -188,8 +190,8 @@ def analyze_volume_change(market_slug, hours=24):
                 snap_hours_ago = (
                     datetime.now(timezone.utc) - snap_time
                 ).total_seconds() / 3600
-            except Exception:
-                pass
+            except (ValueError, TypeError) as e:
+                print(f"⚠️ 快照时间戳解析失败: {e}")
         # 快照太新（< 0.5h）或太旧（> 2×hours）都降低置信度
         time_ok = True
         if snap_hours_ago is not None:
@@ -391,7 +393,6 @@ def get_market_momentum(market_title):
             "recommendation": "hold",
             "factors": [],
             "match_ratio": 0,
-            "recommendation": "hold",
         }
 
 

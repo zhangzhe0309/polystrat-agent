@@ -40,7 +40,7 @@ except ImportError:
 
 # ── 常量 ──────────────────────────────────────────────────────────
 
-CLOB_BASE = "https://clob.polymarket.com"
+from config_center import CLOB_BASE
 GAMMA_BASE = "https://gamma-api.polymarket.com"
 
 # 套利阈值
@@ -400,7 +400,8 @@ class NegRiskArbitrageDetector:
                 end_date = end_date.replace(tzinfo=timezone.utc)
             
             hours_to_resolution = (end_date - datetime.now(timezone.utc)).total_seconds() / 3600
-        except Exception:
+        except Exception as e:
+            print(f"⚠️ 日期解析失败: {e}")
             return None
         
         # 只关注 24h-168h 内 Resolution 的市场
@@ -484,8 +485,8 @@ class NegRiskArbitrageDetector:
                     data = await resp.json()
                     self._book_cache.append((cache_key, time.time(), data))
                     return data
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"⚠️ 订单簿获取失败: {e}")
         
         return None
     
@@ -638,7 +639,8 @@ def scan_negrisk_arbitrage(top_markets: int = 50) -> List[dict]:
                 return future.result(timeout=30)
         else:
             return loop.run_until_complete(_run())
-    except Exception:
+    except Exception as e:
+        print(f"⚠️ 套利扫描执行失败: {e}")
         return asyncio.run(_run())
 
 

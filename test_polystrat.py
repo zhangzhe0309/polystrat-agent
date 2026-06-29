@@ -121,13 +121,13 @@ class TestMLOptimizer(unittest.TestCase):
         self.assertEqual(labels[0], 1, "win标签应为1")
     
     def test_feature_count(self):
-        """特征数量应为5（只使用交易时可获取的市场信息）"""
+        """特征数量应为15（只使用交易时可获取的市场信息）"""
         trades = [
             {"llm_prob": 0.7, "sentiment_score": 0.3, "edge": 0.1, "market_price": 0.6,
              "direction": "Yes", "amount": 2, "final_prob": 0.99, "result": "win"},
         ]
         features, labels = self.extract_features(trades)
-        self.assertEqual(len(features[0]), 5, "特征数应为5")
+        self.assertEqual(len(features[0]), 15, "特征数应为15（扩展后）")
 
 
 class TestSmartKeywords(unittest.TestCase):
@@ -188,25 +188,255 @@ class TestDynamicOptimizer(unittest.TestCase):
 
 class TestSentimentAnalysis(unittest.TestCase):
     """情感分析模块测试"""
-    
+
     def setUp(self):
         from sentiment_analysis import analyze_sentiment_simple
         self.analyze_sentiment_simple = analyze_sentiment_simple
-    
+
     def test_positive_sentiment(self):
         """正面情感识别"""
         result = self.analyze_sentiment_simple("Bitcoin surges to new highs, bullish sentiment")
         self.assertGreater(result["score"], 0)
-    
+
     def test_negative_sentiment(self):
         """负面情感识别"""
         result = self.analyze_sentiment_simple("Market crash expected, bearish sentiment widespread")
         self.assertLess(result["score"], 0)
-    
+
     def test_neutral_sentiment(self):
         """中性情感识别"""
         result = self.analyze_sentiment_simple("The weather is cloudy today")
         self.assertEqual(result["score"], 0)
+
+    def test_negation_reverses_sentiment(self):
+        """否定词应反转情感方向"""
+        bullish = self.analyze_sentiment_simple("bullish market outlook")
+        not_bullish = self.analyze_sentiment_simple("not bullish market outlook")
+        self.assertLess(not_bullish["score"], bullish["score"],
+                        "否定词应降低正面分数")
+
+    def test_degree_words_amplify(self):
+        """程度词应增强情感强度（多词场景下归一化前权重更大）"""
+        # 多词场景：程度词影响正负面权重比例
+        bullish = self.analyze_sentiment_simple("bullish market optimistic outlook")
+        very_bullish = self.analyze_sentiment_simple("very bullish market optimistic outlook")
+        # 归一化后分数可能相同，但置信度应更高（更多有效权重）
+        self.assertGreaterEqual(very_bullish["confidence"], bullish["confidence"],
+                                "very 应提升情感置信度")
+
+    def test_degree_words_diminish(self):
+        """弱化程度词应降低情感置信度（多词场景）"""
+        bullish = self.analyze_sentiment_simple("bullish market optimistic outlook")
+        slightly_bullish = self.analyze_sentiment_simple("slightly bullish market optimistic outlook")
+        # slightly 降低单个词权重，整体置信度可能受影响
+        self.assertLessEqual(slightly_bullish["confidence"], bullish["confidence"] + 0.1,
+                             "slightly 不应大幅增加置信度")
+
+    def test_negation_with_degree_word(self):
+        """否定词+程度词组合应弱化而非增强"""
+        very_bullish = self.analyze_sentiment_simple("very bullish market")
+        not_very_bullish = self.analyze_sentiment_simple("not very bullish market")
+        # "not very bullish" 不应比 "very bullish" 更正面
+        self.assertLess(not_very_bullish["score"], very_bullish["score"],
+                        "否定+程度词组合应弱化情感")
+
+    def test_overwhelming_as_degree_word(self):
+        """程度副词不再出现在正负面列表中，避免冲突"""
+        victory = self.analyze_sentiment_simple("overwhelming victory")
+        defeat = self.analyze_sentiment_simple("overwhelming defeat")
+        self.assertGreater(victory["score"], defeat["score"],
+                           "overwhelming victory 应比 overwhelming defeat 更正面")
+
+    def test_empty_input(self):
+        """空输入应返回中性"""
+        result = self.analyze_sentiment_simple("")
+        self.assertEqual(result["score"], 0)
+        self.assertEqual(result["label"], "neutral")
+
+    def test_none_input(self):
+        """None 输入应返回中性"""
+        result = self.analyze_sentiment_simple(None)
+        self.assertEqual(result["score"], 0)
+
+    def test_numeric_input(self):
+        """数字输入应返回中性"""
+        result = self.analyze_sentiment_simple(12345)
+        self.assertEqual(result["score"], 0)
+
+    def test_output_structure(self):
+        """输出结构应包含所有必要字段"""
+        result = self.analyze_sentiment_simple("bullish outlook")
+        self.assertIn("score", result)
+        self.assertIn("label", result)
+        self.assertIn("confidence", result)
+        self.assertIn("explanation", result)
+        self.assertIn(result["label"], ["positive", "negative", "neutral"])
+
+    def test_score_bounded(self):
+        """分数应在 [-1, 1] 范围内"""
+        result = self.analyze_sentiment_simple(
+            "bullish surge skyrocket rally optimistic favorable great excellent amazing"
+        )
+        self.assertGreaterEqual(result["score"], -1)
+        self.assertLessEqual(result["score"], 1)
+
+    def test_confidence_bounded(self):
+        """置信度应在 [0, 1] 范围内"""
+        result = self.analyze_sentiment_simple("bullish market outlook today")
+        self.assertGreaterEqual(result["confidence"], 0)
+        self.assertLessEqual(result["confidence"], 1)
+
+
+class TestLLMSentimentAnalysis(unittest.TestCase):
+    """LLM 情感分析 + 集成函数测试（Mock LLM API）"""
+
+    def setUp(self):
+        from sentiment_analysis import (
+            analyze_sentiment_with_llm,
+            analyze_news_sentiment,
+            _extract_json_from_llm,
+        )
+        import sentiment_analysis as sa
+        sa.LLM_API_KEY = "test_api_key_for_mock"
+        sa._sentiment_cache.clear()
+        self.analyze_sentiment_with_llm = analyze_sentiment_with_llm
+        self.analyze_news_sentiment = analyze_news_sentiment
+        self._extract_json_from_llm = _extract_json_from_llm
+
+    def _mock_llm_response(self, mock_post, content, status_code=200):
+        mock_resp = MagicMock()
+        mock_resp.status_code = status_code
+        mock_resp.json.return_value = {
+            "choices": [{"message": {"content": content}}]
+        }
+        mock_post.return_value = mock_resp
+
+    @patch("sentiment_analysis.requests.post")
+    def test_llm_json_positive(self, mock_post):
+        self._mock_llm_response(
+            mock_post,
+            '{"score": 0.8, "label": "positive", "confidence": 0.9, "keywords": ["bullish", "surge"], "explanation": "乐观"}',
+        )
+        result = self.analyze_sentiment_with_llm("bullish market surge")
+        self.assertGreater(result["score"], 0)
+        self.assertEqual(result["label"], "positive")
+        self.assertIn("bullish", result.get("keywords", []))
+
+    @patch("sentiment_analysis.requests.post")
+    def test_llm_json_negative(self, mock_post):
+        self._mock_llm_response(
+            mock_post,
+            '{"score": -0.7, "label": "negative", "confidence": 0.8, "keywords": ["crash", "fear"], "explanation": "悲观"}',
+        )
+        result = self.analyze_sentiment_with_llm("market crash fear")
+        self.assertLess(result["score"], 0)
+        self.assertEqual(result["label"], "negative")
+
+    @patch("sentiment_analysis.requests.post")
+    def test_llm_json_markdown_block(self, mock_post):
+        """Markdown 代码块中的 JSON 应被正确提取"""
+        self._mock_llm_response(
+            mock_post,
+            "```json\n{\"score\": 0.6, \"label\": \"positive\", \"confidence\": 0.7}\n```",
+        )
+        result = self.analyze_sentiment_with_llm("positive outlook")
+        self.assertAlmostEqual(result["score"], 0.6)
+
+    @patch("sentiment_analysis.requests.post")
+    def test_llm_invalid_json_keyword_fallback(self, mock_post):
+        """JSON 解析失败时降级为关键词判断"""
+        self._mock_llm_response(mock_post, "I think this is positive and bullish")
+        result = self.analyze_sentiment_with_llm("some text")
+        self.assertEqual(result["label"], "positive")
+        self.assertGreater(result["score"], 0)
+
+    @patch("sentiment_analysis.requests.post")
+    def test_llm_429_retry_then_success(self, mock_post):
+        """429 限流后重试成功"""
+        mock_resp_429 = MagicMock()
+        mock_resp_429.status_code = 429
+        mock_resp_200 = MagicMock()
+        mock_resp_200.status_code = 200
+        mock_resp_200.json.return_value = {
+            "choices": [{"message": {"content": '{"score": 0.5, "label": "positive", "confidence": 0.7}'}}]
+        }
+        mock_post.side_effect = [mock_resp_429, mock_resp_200]
+        result = self.analyze_sentiment_with_llm("test text")
+        self.assertGreater(result["score"], 0)
+
+    @patch("sentiment_analysis.requests.post")
+    def test_llm_all_models_fail(self, mock_post):
+        """所有模型均失败时返回中性"""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 500
+        mock_post.return_value = mock_resp
+        result = self.analyze_sentiment_with_llm("test text")
+        self.assertEqual(result["score"], 0)
+        self.assertEqual(result["label"], "neutral")
+
+    @patch("sentiment_analysis.requests.post")
+    def test_cache_hit(self, mock_post):
+        """相同文本应命中缓存，不重复调用 LLM"""
+        self._mock_llm_response(
+            mock_post,
+            '{"score": 0.9, "label": "positive", "confidence": 0.95}',
+        )
+        result1 = self.analyze_sentiment_with_llm("cache test text")
+        result2 = self.analyze_sentiment_with_llm("cache test text")
+        self.assertEqual(result1["score"], result2["score"])
+        self.assertEqual(mock_post.call_count, 1)  # 只调用一次 API
+
+    def test_extract_json_direct(self):
+        """直接 JSON 解析"""
+        result = self._extract_json_from_llm('{"score": 0.5}')
+        self.assertEqual(result.get("score"), 0.5)
+
+    def test_extract_json_markdown(self):
+        """Markdown 代码块 JSON 解析"""
+        result = self._extract_json_from_llm("```json\n{\"score\": 0.7}\n```")
+        self.assertEqual(result.get("score"), 0.7)
+
+    def test_extract_json_nested_braces(self):
+        """嵌套花括号 JSON 解析"""
+        result = self._extract_json_from_llm(
+            'Some text {"score": 0.3, "nested": {"key": "val"}} more text'
+        )
+        self.assertEqual(result.get("score"), 0.3)
+
+    def test_extract_json_no_json(self):
+        """无 JSON 内容返回空字典"""
+        result = self._extract_json_from_llm("纯文本无 JSON")
+        self.assertEqual(result, {})
+
+    def test_analyze_news_sentiment_empty(self):
+        """空新闻列表"""
+        result = self.analyze_news_sentiment([])
+        self.assertEqual(result["overall_score"], 0)
+        self.assertEqual(result["news_count"], 0)
+
+    @patch("sentiment_analysis.analyze_sentiment_with_llm")
+    def test_analyze_news_sentiment_low_confidence_downgrade(self, mock_llm):
+        """LLM 置信度低时自动降级为简单分析"""
+        mock_llm.return_value = {"score": 0, "label": "neutral", "confidence": 0.1, "keywords": [], "explanation": "低置信度"}
+        news_list = [{"text": "bullish market outlook positive"}]
+        result = self.analyze_news_sentiment(news_list)
+        # 降级后简单分析应识别到正面词汇
+        self.assertGreater(result["overall_score"], 0)
+
+    @patch("sentiment_analysis.analyze_sentiment_with_llm")
+    def test_analyze_news_weighted_average(self, mock_llm):
+        """置信度加权平均计算"""
+        def side_effect(text, ctx=""):
+            if "positive" in text:
+                return {"score": 0.8, "label": "positive", "confidence": 0.9, "keywords": [], "explanation": ""}
+            return {"score": -0.5, "label": "negative", "confidence": 0.5, "keywords": [], "explanation": ""}
+        mock_llm.side_effect = side_effect
+        result = self.analyze_news_sentiment([
+            {"text": "positive news"},
+            {"text": "negative news"},
+        ])
+        # 加权平均应向高置信度的正面倾斜
+        self.assertGreater(result["overall_score"], 0)
 
 
 class TestFileLock(unittest.TestCase):
@@ -228,7 +458,7 @@ class TestFileLock(unittest.TestCase):
                     if test_file.exists():
                         try:
                             trades = json.loads(test_file.read_text())
-                        except:
+                        except (json.JSONDecodeError, OSError, IOError):
                             pass
                     trades.append(data)
                     test_file.write_text(json.dumps(trades))
@@ -269,6 +499,7 @@ def run_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestSmartKeywords))
     suite.addTests(loader.loadTestsFromTestCase(TestDynamicOptimizer))
     suite.addTests(loader.loadTestsFromTestCase(TestSentimentAnalysis))
+    suite.addTests(loader.loadTestsFromTestCase(TestLLMSentimentAnalysis))
     suite.addTests(loader.loadTestsFromTestCase(TestFileLock))
     
     # 运行测试

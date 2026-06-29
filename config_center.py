@@ -10,10 +10,71 @@ import json
 from pathlib import Path
 from polystrat_logger import log, log_error
 
-# 配置文件路径
-CONFIG_DIR = Path("/root/.hermes/profiles/life/data/config")
+# ============================================================
+# 基础路径常量（统一管理，消除重复定义）
+# ============================================================
+BASE_DIR = Path("/root/.hermes/profiles/life")
+DATA_DIR = BASE_DIR / "data"
+LOG_DIR = BASE_DIR / "home/.hermes/polymarket_bot/logs"
+SCRIPTS_DIR = BASE_DIR / "scripts"
+ENV_FILE = BASE_DIR / ".env"
+
+# Log files
+TRADE_LOG = LOG_DIR / "polystrat_trades.json"
+ALERT_LOG = LOG_DIR / "alerts.json"
+PERF_LOG = LOG_DIR / "performance.json"
+KEY_AUDIT_LOG = LOG_DIR / "key_audit.log"
+SEEN_KEYS_FILE = LOG_DIR / "seen_keys.json"
+TRADE_HISTORY_FILE = LOG_DIR / "trade_history.json"
+SETTLEMENT_LOG = LOG_DIR / "settlement_log.json"
+DAILY_REPORT_FILE = LOG_DIR / "daily_pnl_simple.json"
+
+# Config
+CONFIG_DIR = DATA_DIR / "config"
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_FILE = CONFIG_DIR / "polystrat_config.json"
+
+# State files
+CIRCUIT_BREAKER_STATE = DATA_DIR / "circuit_breaker.json"
+TRADE_LIMITS_STATE = DATA_DIR / "trade_limits.json"
+OPTIMIZATION_CONFIG = DATA_DIR / "optimization_config.json"
+
+# Cache directories
+MARKET_MICROSTRUCTURE_CACHE = DATA_DIR / "market_microstructure"
+VOLUME_CACHE_DIR = DATA_DIR / "volume_cache"
+AIRDROP_CACHE_DIR = DATA_DIR / "airdrop_cache"
+ARBITRAGE_CACHE_DIR = DATA_DIR / "arbitrage_cache"
+KALSHI_CACHE_DIR = DATA_DIR / "kalshi_cache"
+MANIFOLD_CACHE_DIR = DATA_DIR / "manifold_cache"
+ONCHAIN_CACHE_DIR = DATA_DIR / "onchain_cache"
+NEWS_CACHE_DIR = DATA_DIR / "news_cache"
+SERPAPI_USAGE_FILE = DATA_DIR / "serpapi_usage.json"
+
+# ML model
+ML_MODEL_PATH = DATA_DIR / "ml_model.pkl"
+
+# Kong score
+KONG_SCORE_DIR = DATA_DIR / "kong_score"
+TP_MANAGER_DIR = DATA_DIR / "tp_manager"
+POLYSTRAT_DIR = DATA_DIR / "polystrat"
+
+# Polkadot
+WHALE_WATCH_SEEN = DATA_DIR / "whale_watch_seen.json"
+
+# ============================================================
+# API 常量（统一管理）
+# ============================================================
+GAMMA_API = "https://gamma-api.polymarket.com"
+CLOB_API = "https://clob.polymarket.com"
+CLOB_BASE = CLOB_API
+
+# 创建所有目录
+for _dir in [DATA_DIR, LOG_DIR, SCRIPTS_DIR, CONFIG_DIR,
+             MARKET_MICROSTRUCTURE_CACHE, VOLUME_CACHE_DIR,
+             AIRDROP_CACHE_DIR, ARBITRAGE_CACHE_DIR, KALSHI_CACHE_DIR,
+             MANIFOLD_CACHE_DIR, ONCHAIN_CACHE_DIR, NEWS_CACHE_DIR,
+             KONG_SCORE_DIR, TP_MANAGER_DIR, POLYSTRAT_DIR]:
+    _dir.mkdir(parents=True, exist_ok=True)
 
 # 默认配置
 DEFAULT_CONFIG = {

@@ -288,7 +288,7 @@ def calculate_historical_accuracy(trade_history):
                 model_name = parts[0].strip()
                 try:
                     prob = int(parts[1].replace("¢", "").strip()) / 100
-                except:
+                except (ValueError, AttributeError):
                     continue
 
                 # 方向感知判断：模型预测是否支持交易方向

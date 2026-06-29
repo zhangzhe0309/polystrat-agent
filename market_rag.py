@@ -20,7 +20,9 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 # 缓存目录
-RAG_DATA_DIR = Path("/root/.hermes/profiles/life/data/market_rag")
+from config_center import DATA_DIR
+
+RAG_DATA_DIR = DATA_DIR / "market_rag"
 RAG_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # Embedding 配置
@@ -69,8 +71,8 @@ def embed_text(text: str) -> Optional[list[float]]:
             cached = json.loads(cache_file.read_text())
             if cached.get("vector") and time.time() - cached.get("timestamp", 0) < 86400 * 7:
                 return cached["vector"]
-        except Exception:
-            pass
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"⚠️ Embedding缓存读取失败: {e}")
     
     # API 调用
     config = _get_embedding_api_config()
@@ -102,8 +104,8 @@ def embed_text(text: str) -> Optional[list[float]]:
                     "timestamp": time.time(),
                     "text_hash": cache_key,
                 }))
-            except Exception:
-                pass
+            except (OSError, IOError) as e:
+                print(f"⚠️ Embedding缓存写入失败: {e}")
             
             return vector
         else:
@@ -173,7 +175,8 @@ class MarketRAG:
                 data = json.loads(index_file.read_text())
                 # 不加载向量到内存，按需从缓存读取
                 self.index = data.get("metadata", {})
-            except Exception:
+            except (json.JSONDecodeError, OSError) as e:
+                print(f"⚠️ RAG索引加载失败: {e}")
                 self.index = {}
     
     def _save_index(self):
@@ -267,7 +270,8 @@ class MarketRAG:
                 market_vector = cached.get("vector")
                 if not market_vector:
                     continue
-            except Exception:
+            except (json.JSONDecodeError, KeyError) as e:
+                print(f"⚠️ 缓存向量读取失败: {e}")
                 continue
             
             # 计算相似度

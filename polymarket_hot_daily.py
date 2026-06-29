@@ -37,7 +37,7 @@ def load_cache():
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except:
+    except (json.JSONDecodeError, OSError, IOError):
         return {"seen": [], "last_run": None}
 
 def save_cache(data):

@@ -14,7 +14,7 @@ from pathlib import Path
 from polystrat_logger import log, log_error
 
 # 状态文件
-STATE_FILE = Path("/root/.hermes/profiles/life/data/circuit_breaker.json")
+from config_center import CIRCUIT_BREAKER_STATE as STATE_FILE
 STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 # 初始资金（从环境变量读取，与主程序保持一致）
@@ -50,7 +50,7 @@ class CircuitBreaker:
                         return json.load(f)
                     finally:
                         fcntl.flock(f, fcntl.LOCK_UN)
-        except:
+        except (json.JSONDecodeError, OSError, IOError):
             pass
 
         return {

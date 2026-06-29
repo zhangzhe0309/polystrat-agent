@@ -24,7 +24,7 @@ LIMITS_CONFIG = {
 }
 
 # 状态文件
-STATE_FILE = Path("/root/.hermes/profiles/life/data/trade_limits.json")
+from config_center import TRADE_LIMITS_STATE as STATE_FILE
 STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 
@@ -48,7 +48,7 @@ class TradeLimiter:
                         return json.load(f)
                     finally:
                         fcntl.flock(f, fcntl.LOCK_UN)
-        except:
+        except (json.JSONDecodeError, OSError, IOError):
             pass
 
         return {

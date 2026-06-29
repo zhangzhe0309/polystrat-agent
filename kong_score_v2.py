@@ -157,7 +157,7 @@ class KongScoreV2:
         self._decay_history: Dict[str, List[dict]] = {}
         
         # 持久化
-        self.data_dir = Path(data_dir) if data_dir else Path("/root/.hermes/profiles/life/data/kong_score")
+        from config_center import KONG_SCORE_DIR; self.data_dir = Path(data_dir) if data_dir else KONG_SCORE_DIR
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._load_state()
     
@@ -435,16 +435,16 @@ class KongScoreV2:
             }
             with open(filepath, "w") as f:
                 json.dump(data, f, indent=2)
-        except Exception:
-            pass
+        except (OSError, IOError) as e:
+            print(f"⚠️ 分数历史保存失败: {e}")
     
     def _save_state(self):
         filepath = self.data_dir / "decay_history.json"
         try:
             with open(filepath, "w") as f:
                 json.dump(self._decay_history, f, indent=2)
-        except Exception:
-            pass
+        except (OSError, IOError) as e:
+            print(f"⚠️ 衰减历史保存失败: {e}")
     
     def _load_state(self):
         filepath = self.data_dir / "decay_history.json"
@@ -452,7 +452,8 @@ class KongScoreV2:
             try:
                 with open(filepath) as f:
                     self._decay_history = json.load(f)
-            except Exception:
+            except (json.JSONDecodeError, OSError) as e:
+                print(f"⚠️ 衰减历史加载失败: {e}")
                 self._decay_history = {}
 
 
@@ -594,7 +595,8 @@ def calculate_kongscore_v2(wallet_address: str, activity: list = None) -> dict:
                 timeout=15
             )
             activity = resp.json() if resp.status_code == 200 else []
-        except Exception:
+        except requests.RequestException as e:
+            print(f"⚠️ 获取钱包活动失败: {e}")
             activity = []
     
     metrics = extract_wallet_metrics(wallet_address, activity)

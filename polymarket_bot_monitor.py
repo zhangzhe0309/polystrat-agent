@@ -10,7 +10,7 @@ import requests
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
-load_dotenv("/root/.hermes/profiles/life/home/.hermes/polymarket_bot/.env")
+from config_center import BASE_DIR; load_dotenv(BASE_DIR / "home/.hermes/polymarket_bot/.env")
 
 # === CONFIG ===
 WALLET_ADDRESSES = [
@@ -26,9 +26,9 @@ AUTO_TRADE_ENABLED = os.getenv("AUTO_TRADE_ENABLED", "false").lower() == "true"
 DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
 
 DATA_API = "https://data-api.polymarket.com"
-CLOB_API = "https://clob.polymarket.com"
-SEEN_FILE = "/root/.hermes/profiles/life/home/.hermes/polymarket_bot/logs/seen_keys.json"
-TRADE_HISTORY_FILE = "/root/.hermes/profiles/life/home/.hermes/polymarket_bot/logs/trade_history.json"
+from config_center import CLOB_API
+from config_center import SEEN_KEYS_FILE as SEEN_FILE
+from config_center import TRADE_HISTORY_FILE
 
 
 def load_seen_keys():
@@ -41,7 +41,7 @@ def load_seen_keys():
         # Prune entries older than 2 hours to prevent unbounded growth
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
         return {k: v for k, v in data.items() if v.get("ts", "") > cutoff}
-    except:
+    except (json.JSONDecodeError, OSError, IOError):
         return {}
 
 
@@ -73,7 +73,7 @@ def get_recent_buys(address, cutoff_time):
                 else:
                     try:
                         dt = datetime.fromisoformat(str(ts).replace('Z', '+00:00'))
-                    except:
+                    except (ValueError, TypeError):
                         continue
                 if dt < cutoff_time:
                     continue
@@ -88,7 +88,8 @@ def get_recent_buys(address, cutoff_time):
                     'conditionId': a.get('conditionId', ''),
                 })
         return results
-    except Exception:
+    except Exception as e:
+        print(f"⚠️ 获取用户活动失败: {e}")
         return []
 
 
@@ -114,8 +115,9 @@ def save_trade_record(info):
     trades = []
     if os.path.exists(TRADE_HISTORY_FILE):
         try:
-            trades = json.load(open(TRADE_HISTORY_FILE))
-        except:
+            with open(TRADE_HISTORY_FILE) as f:
+                trades = json.load(f)
+        except (json.JSONDecodeError, OSError, IOError):
             pass
     trades.append(info)
     with open(TRADE_HISTORY_FILE, 'w') as f:
