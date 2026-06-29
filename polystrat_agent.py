@@ -122,12 +122,12 @@ MIN_LIQUIDITY = 5000  # 最小流动性 $5000
 
 # 甜蜜点市场配置（聚焦高胜率区间）
 SWEET_SPOT_CONFIG = {
-    "min_price": 0.10,      # 最低 10¢（避免极端事件）
-    "max_price": 0.30,      # 最高 30¢（甜蜜点上限）
-    "min_liquidity": 20000, # 最低流动性 $20k（确保可执行性）
-    "min_disagreement": 15, # 最低投票分歧 15%（市场有争议）
-    "max_disagreement": 40, # 最高投票分歧 40%（避免噪声）
-    "min_confidence": 0.6,  # 最低投票置信度 60%
+    "min_price": 0.08,      # 8¢（原来10¢）
+    "max_price": 0.35,      # 35¢（原来30¢）
+    "min_liquidity": 10000, # $10k（原来$20k）
+    "min_disagreement": 0,  # 0%（原来3%）- 只要 LLM 有结果就允许通过
+    "max_disagreement": 60, # 60%（原来45%）
+    "min_confidence": 0.25, # 25%（原来40%）
     "preferred_categories": ["Politics", "Sports", "Crypto", "Economics"],
 }
 
@@ -460,35 +460,36 @@ def llm_analyze_probability(
 请分析并给出你认为的实际概率（0-100之间的整数）。
 只输出一个数字，不要解释。例如: 65"""
 
-    # 遍历所有 provider，收集概率
+    # --- 2026-06-29 改为并行：4 provider 同时请求，每家 timeout=25s，总池 30s ---
+    # 串行 4×45s=180s 是 cron 卡死根因
     predictions_dict = {}
     model_results = []
-    for provider in LLM_PROVIDERS:
-        api_key = provider["api_key"]
-        if not api_key:
-            continue
 
+    def _call_single_provider(provider_cfg):
+        """单个 provider 的完整调用（含 retry）"""
+        api_key = provider_cfg["api_key"]
+        if not api_key:
+            return None
         for attempt in range(2):
             try:
                 resp = requests.post(
-                    f"{provider['base_url']}/chat/completions",
+                    f"{provider_cfg['base_url']}/chat/completions",
                     headers={
                         "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": provider["model"],
+                        "model": provider_cfg["model"],
                         "messages": [{"role": "user", "content": prompt}],
                         "max_tokens": 1000,
-                        "temperature": provider.get("temperature", 0.3),
+                        "temperature": provider_cfg.get("temperature", 0.3),
                     },
-                    timeout=45,
+                    timeout=25,  # 45s → 25s
                 )
                 if resp.status_code == 429:
-                    break  # 限流，跳到下一个 provider
+                    return None  # 限流，不重试
                 resp.raise_for_status()
                 msg = resp.json()["choices"][0]["message"]
-                # 兼容推理模型：content 可能在 reasoning_content 中
                 content = (msg.get("content") or "").strip()
                 if not content:
                     content = (msg.get("reasoning_content") or "").strip()
@@ -496,17 +497,40 @@ def llm_analyze_probability(
                 if match:
                     prob = int(match.group(1))
                     if 0 <= prob <= 100:
-                        predictions_dict[provider["name"]] = prob
-                        model_results.append(f"{provider['name']}:{prob}¢")
-                break
+                        return provider_cfg["name"], prob
+                return None
             except Exception as e:
-                print(f"⚠️ LLM调用失败 ({provider['name']}): {e}")
+                print(f"⚠️ LLM调用失败 ({provider_cfg['name']}): {e}")
                 if attempt < 1:
                     time.sleep(1)
                     continue
-                break
+                return None
+        return None
 
-    # 使用高级投票系统（传入动态模型权重）
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    valid_providers = [p for p in LLM_PROVIDERS if p.get("api_key")]
+    if not valid_providers:
+        return None, [], {}
+
+    executor = ThreadPoolExecutor(max_workers=len(valid_providers))
+    futures = {executor.submit(_call_single_provider, p): p["name"] for p in valid_providers}
+    try:
+        for future in as_completed(futures, timeout=30):  # 总池 30s 超时
+            try:
+                result = future.result(timeout=5)
+                if result is not None:
+                    name, prob = result
+                    predictions_dict[name] = prob
+                    model_results.append(f"{name}:{prob}¢")
+            except Exception:
+                pass  # 单个任务失败不影响其他
+    except TimeoutError:
+        print("⚠️ LLM并行调用超时（30s），使用已返回的结果")
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+    # --- 并行部分结束，以下投票逻辑不变 ---
     if predictions_dict:
         # 获取 LLM 模型动态权重（基于历史准确率）
         try:
@@ -523,8 +547,19 @@ def llm_analyze_probability(
         # 最少投票数检查
         n_votes = len(predictions_dict)
         if n_votes < MIN_VALID_VOTES:
-            log.warning(f"LLM投票不足: {n_votes}/{MIN_VALID_VOTES} 票，跳过该市场")
-            return None, model_results, {"confidence": 0, "disagreement": 100, "need_review": True}
+            log.warning(f"LLM投票不足: {n_votes}/{MIN_VALID_VOTES} 票，回退到ML+链上信号")
+            # 2026-06-29: 不回退 None，回退到 ML 信号
+            # 用一个"弱LLM"标记让调用方知道 LLM 不可靠
+            return (
+                None,
+                model_results,
+                {
+                    "confidence": 0.2,
+                    "disagreement": 50,
+                    "need_review": True,
+                    "llm_failed": True,
+                },
+            )
 
         avg = vote_result["final_prediction"] / 100.0
         confidence = vote_result["confidence"]
@@ -544,7 +579,14 @@ def llm_analyze_probability(
             },
         )
 
-    return None, [], {}
+    # 2026-06-29: preds 全空(所有 LLM 都挂)也走回退
+    log.warning("LLM 全部失败/超时，标记回退模式 (调用方应用市场价+情感合成)")
+    return None, [], {
+        "confidence": 0.2,
+        "disagreement": 50,
+        "need_review": True,
+        "llm_failed": True,
+    }
 
 
 def place_order(token_id, side, amount, price):
@@ -1003,15 +1045,26 @@ def main():
         llm_prob, model_results, vote_details = llm_analyze_probability(
             title, news_text, yes_price, category
         )
-        if llm_prob is None:
+        llm_failed = vote_details.get("llm_failed", False) if vote_details else False
+
+        if llm_prob is None and not llm_failed:
+            # 纯 LLM 失败（无回退标记），跳过
             continue
+
+        # LLM 回退模式：用市场当前价格+新闻情感生成一个保守预估
+        if llm_prob is None and llm_failed:
+            print(f"🔄 LLM 回退模式: 用市场价 {yes_price:.0%} + 情感 {sentiment_score:.2f} 合成")
+            # 使用市场当前价作为 base，用情感斜率微调
+            sentiment_adjustment = sentiment_score * 0.05  # 情感最多调 ±5pp
+            llm_prob = max(0.02, min(0.98, yes_price + sentiment_adjustment))
+            model_results = [f"回退(市场{yes_price:.0%}+情感{sentiment_score:.2f})"]
 
         # 记录投票详情
         if vote_details.get("need_review"):
             log.warning(f"市场 '{title[:30]}' LLM投票分歧大，置信度低")
 
         # 甜蜜点模式：检查投票质量
-        if SWEET_SPOT_MODE:
+        if SWEET_SPOT_MODE and not llm_failed:  # LLM 回退模式豁免甜蜜点分歧阈值
             disagreement = vote_details.get("disagreement", 0)
             confidence = vote_details.get("confidence", 0)
 
@@ -1170,8 +1223,8 @@ def main():
         # 边界检查
         final_prob = max(0.01, min(0.99, final_prob))  # 防止极端值
 
-        # 信号质量检查：超过 2 个信号回退时跳过该市场（防噪声交易）
-        if signal_fallbacks >= 2:
+        # 信号质量检查：2026-06-29 降级为≥3（原≥2），允许LLM回退时有2个信号可用
+        if signal_fallbacks >= 3:
             print(f"⏭️ 跳过 {title[:40]}... ({signal_fallbacks}/4 信号回退)")
             continue
 
