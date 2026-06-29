@@ -922,11 +922,10 @@ def main():
         print(f"🔍 搜索关键词: {search_query}")
 
         try:
-            # 使用多个关键词搜索，合并结果
+            # 2026-06-29: 只搜1个query(原2个), 避免累积超时 >90s
             all_news = []
-            for query in search_queries[:2]:
-                news = search_news_for_market(query, max_results=2)
-                all_news.extend(news)
+            news = search_news_for_market(search_query, max_results=2)
+            all_news.extend(news)
 
             # 去重
             seen_titles = set()
