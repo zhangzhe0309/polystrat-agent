@@ -32,16 +32,14 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 from collections import deque
 
+from config_center import CLOB_BASE
+GAMMA_BASE = "https://gamma-api.polymarket.com"
+
 try:
     import aiohttp
     AIOHTTP_AVAILABLE = True
 except ImportError:
     AIOHTTP_AVAILABLE = False
-
-# ── 常量 ──────────────────────────────────────────────────────────
-
-from config_center import CLOB_BASE
-GAMMA_BASE = "https://gamma-api.polymarket.com"
 
 # 套利阈值
 MIN_PROFIT_THRESHOLD = 0.02     # 最小利润 $0.02 (覆盖 Gas)

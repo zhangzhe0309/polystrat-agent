@@ -11,10 +11,10 @@ import os
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from polystrat_logger import log, log_error
 
-# 状态文件
+from polystrat_logger import log, log_error
 from config_center import CIRCUIT_BREAKER_STATE as STATE_FILE
+
 STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 # 初始资金（从环境变量读取，与主程序保持一致）

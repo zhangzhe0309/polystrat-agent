@@ -11,8 +11,8 @@ import requests
 from datetime import datetime, timezone
 from pathlib import Path
 from polystrat_logger import log, log_error
+from error_handler import safe_execute
 
-# Polymarket API 配置
 from config_center import GAMMA_API, CLOB_API
 DATA_API = "https://data-api.polymarket.com"
 
@@ -75,18 +75,16 @@ def get_balance(client=None):
         float: 余额 (USDC)
     """
     if client is None:
-        return 1000.0  # 模拟余额
+        return 1000.0
     
-    try:
+    def _fetch():
         from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
-        
         balance = client.get_balance_allowance(
             BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
         )
         return int(balance["balance"]) / 1e6
-    except Exception as e:
-        log_error("polymarket", e, "获取余额失败")
-        return 0.0
+    
+    return safe_execute(_fetch, default=0.0, retries=2)
 
 def get_price(token_id, client=None):
     """
@@ -102,16 +100,15 @@ def get_price(token_id, client=None):
     if client is None:
         return {"midpoint": 0.5, "best_ask": 0.51, "best_bid": 0.49, "spread": 0.02}
     
-    try:
+    def _fetch():
         return {
             "midpoint": float(client.get_midpoint(token_id)["mid"]),
             "best_ask": float(client.get_price(token_id, side="BUY")["price"]),
             "best_bid": float(client.get_price(token_id, side="SELL")["price"]),
             "spread": float(client.get_spread(token_id)["spread"]),
         }
-    except Exception as e:
-        log_error("polymarket", e, f"获取价格失败: {token_id[:10]}")
-        return None
+    
+    return safe_execute(_fetch, default=None, retries=2)
 
 def get_positions(address=None, client=None):
     """

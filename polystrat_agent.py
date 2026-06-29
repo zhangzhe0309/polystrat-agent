@@ -16,16 +16,17 @@ import sys
 import json
 import re
 import time
-import requests
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-# 加载 .env 文件（Hermes profile 环境变量）
+import requests
 from dotenv import load_dotenv
-load_dotenv(Path.home() / ".hermes" / "profiles" / "life" / ".env")
-load_dotenv()  # 也加载项目目录的 .env（如果有）
 
-# 导入自定义模块
+from error_handler import safe_execute, handle_error
+
+load_dotenv(Path.home() / ".hermes" / "profiles" / "life" / ".env")
+load_dotenv()
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from news_search import search_news_for_market
 from sentiment_analysis import analyze_news_sentiment
@@ -880,7 +881,7 @@ def main():
         yes_price = market["yes_price"]
         category = market.get("category", "Other")
         liquidity = market.get("liquidity", 0)
-        condition_id = market.get("condition_id", "")  # 唯一标识，用于去重
+        condition_id = market.get("condition_id", "")
 
         # 初始化所有信号的默认值（防止 NameError）
         microstructure_signal = {"recommendation": "hold", "confidence": 0.3}
@@ -1390,4 +1391,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        handle_error(e, "PolyStrat 主流程崩溃")
+        raise
