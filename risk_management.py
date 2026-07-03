@@ -12,6 +12,7 @@ import os
 from datetime import datetime, timezone
 from safe_file_ops import atomic_read_json
 from polystrat_logger import log
+from constants import DEFAULT_BALANCE
 
 # 配置
 STOP_LOSS_THRESHOLD = 0.10  # 最大累计回撤10%（正数，与 drawdown_pct 比较）
@@ -114,7 +115,7 @@ def check_stop_loss(balance=None, trade_history=None):
         trade_history = load_trade_history()
 
     if balance is None:
-        balance = float(os.environ.get("POLYSTRAT_BALANCE", "1000.0"))
+        balance = float(os.environ.get("POLYSTRAT_BALANCE", str(DEFAULT_BALANCE)))
 
     # 统计已结算交易的盈亏
     net_pnl = 0.0

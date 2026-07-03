@@ -14,11 +14,12 @@ from pathlib import Path
 
 from polystrat_logger import log, log_error
 from config_center import CIRCUIT_BREAKER_STATE as STATE_FILE
+from constants import DEFAULT_BALANCE
 
 STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-# 初始资金（从环境变量读取，与主程序保持一致）
-INITIAL_BALANCE = float(os.environ.get("POLYSTRAT_BALANCE", "200.0"))
+# 初始资金（从环境变量读取，使用统一默认值）
+INITIAL_BALANCE = float(os.environ.get("POLYSTRAT_BALANCE", str(DEFAULT_BALANCE)))
 
 # 断路器配置（优化后：放宽触发条件，避免频繁触发）
 BREAKER_CONFIG = {

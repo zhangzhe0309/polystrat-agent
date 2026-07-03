@@ -10,24 +10,13 @@ import json
 from pathlib import Path
 
 from polystrat_logger import log, log_error
+from constants import (
+    BASE_DIR, DATA_DIR, LOG_DIR, SCRIPTS_DIR, ENV_FILE,
+    TRADE_LOG, ALERT_LOG, PERF_LOG, KEY_AUDIT_LOG, SEEN_KEYS_FILE,
+    TRADE_HISTORY_FILE, SETTLEMENT_LOG
+)
 
-# ============================================================
-# 基础路径常量（统一管理，消除重复定义）
-# ============================================================
-BASE_DIR = Path("/root/.hermes/profiles/life")
-DATA_DIR = BASE_DIR / "data"
-LOG_DIR = BASE_DIR / "home/.hermes/polymarket_bot/logs"
-SCRIPTS_DIR = BASE_DIR / "scripts"
-ENV_FILE = BASE_DIR / ".env"
-
-# Log files
-TRADE_LOG = LOG_DIR / "polystrat_trades.json"
-ALERT_LOG = LOG_DIR / "alerts.json"
-PERF_LOG = LOG_DIR / "performance.json"
-KEY_AUDIT_LOG = LOG_DIR / "key_audit.log"
-SEEN_KEYS_FILE = LOG_DIR / "seen_keys.json"
-TRADE_HISTORY_FILE = LOG_DIR / "trade_history.json"
-SETTLEMENT_LOG = LOG_DIR / "settlement_log.json"
+# 额外的文件路径（仅在 config_center 中使用）
 DAILY_REPORT_FILE = LOG_DIR / "daily_pnl_simple.json"
 
 # Config

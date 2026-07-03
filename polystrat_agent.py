@@ -23,6 +23,7 @@ import requests
 from dotenv import load_dotenv
 
 from error_handler import safe_execute, handle_error
+from constants import DEFAULT_BALANCE
 
 load_dotenv(Path.home() / ".hermes" / "profiles" / "life" / ".env")
 load_dotenv()
@@ -802,8 +803,8 @@ def main():
     decisions = []
     trades_made = 0  # 实际下单计数
 
-    # 获取账户余额（从配置读取）
-    balance = float(os.environ.get("POLYSTRAT_BALANCE", "1000.0"))
+    # 获取账户余额（从配置读取，使用统一默认值）
+    balance = float(os.environ.get("POLYSTRAT_BALANCE", str(DEFAULT_BALANCE)))
 
     # 加载交易历史并计算自适应权重
     trade_history = load_trade_history()

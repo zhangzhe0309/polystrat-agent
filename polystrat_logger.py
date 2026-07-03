@@ -12,10 +12,11 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from datetime import datetime
 
-# 2026-06-29 修复循环导入：LOG_DIR 在本地直接定义，不引用 config_center
-# (原代码从 config_center import LOG_DIR 导致 news_search.py 等模块加载时循环崩溃)
-LOG_DIR = Path("/root/.hermes/polymarket_bot/polystrat/logs")
-LOG_DIR.mkdir(parents=True, exist_ok=True)
+# 2026-07-03 重构：使用 constants.py 统一管理路径，消除重复定义
+from constants import LOG_DIR, ensure_dirs
+
+# 确保日志目录存在
+ensure_dirs()
 
 # 日志文件
 LOG_FILE = LOG_DIR / "polystrat.log"
