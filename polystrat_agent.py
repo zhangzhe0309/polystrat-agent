@@ -35,7 +35,7 @@ from risk_management import should_trade, calculate_position_size, get_risk_repo
 from onchain_monitor import get_onchain_signal
 from adaptive_weights import calculate_adaptive_weights, load_trade_history, set_trade_log_path as set_adaptive_log_path
 from ml_optimizer import get_ml_signal
-from multi_platform import get_multiplatform_signal
+from multi_platform import get_multiplatform_signal, fetch_polymarket_markets
 from smart_keywords import get_search_queries
 from advanced_voting import create_voting_system
 from dynamic_optimizer import (
@@ -182,7 +182,7 @@ class PolyStratAgent:
 
     def fetch_markets(self, limit=50):
         """获取活跃市场（按流动性排序取前50，覆盖更多机会）"""
-        markets = fetch_active_markets(limit=limit)
+        markets = fetch_polymarket_markets(limit=limit)
         if not markets:
             return None
         return markets
