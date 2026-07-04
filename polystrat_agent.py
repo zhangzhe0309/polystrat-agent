@@ -124,13 +124,14 @@ MIN_LIQUIDITY = 5000  # 最小流动性 $5000
 
 # 甜蜜点市场配置（聚焦高胜率区间）
 SWEET_SPOT_CONFIG = {
-    "min_price": 0.10,      # 最低 10¢（避免极端事件）
-    "max_price": 0.30,      # 最高 30¢（甜蜜点上限）
-    "min_liquidity": 20000, # 最低流动性 $20k（确保可执行性）
+    "min_price": 0.05,      # 最低 5¢（扩大到低价市场，捕捉更多机会）
+    "max_price": 0.40,      # 最高 40¢（扩大范围）
+    "min_liquidity": 15000, # 最低流动性 $15k（稍微放宽）
     "min_disagreement": 15, # 最低投票分歧 15%（市场有争议）
     "max_disagreement": 40, # 最高投票分歧 40%（避免噪声）
     "min_confidence": 0.6,  # 最低投票置信度 60%
     "preferred_categories": ["Politics", "Sports", "Crypto", "Economics"],
+    "low_price_edge_min": 0.08,  # 低价市场(<0.10)的最小edge要求
 }
 
 # 启用甜蜜点模式（True=聚焦甜蜜点，False=使用原始阈值）
@@ -926,6 +927,13 @@ def main():
             # 优先选择擅长的事件类型
             if category not in SWEET_SPOT_CONFIG["preferred_categories"]:
                 continue
+            # 🆕 低价市场特殊处理：要求更高的edge
+            if yes_price < 0.10:
+                market['_low_price'] = True
+                # 低价市场需要更大的edge来补偿不确定性
+                print(f"   ⚡ 低价市场 {title[:40]}... (price={yes_price:.2f}, 需要edge>{SWEET_SPOT_CONFIG['low_price_edge_min']:.0%})")
+            else:
+                market['_low_price'] = False
         else:
             # 原始模式：使用动态阈值
             if (
@@ -1205,7 +1213,12 @@ def main():
 
         # 8. 计算优势
         edge = final_prob - yes_price
-
+        
+        # 🆕 低价市场特殊edge要求
+        if market.get('_low_price', False) and abs(edge) < SWEET_SPOT_CONFIG['low_price_edge_min']:
+            print(f"⏭️ 跳过 {title[:40]}... (低价市场 edge={edge:.1%} < {SWEET_SPOT_CONFIG['low_price_edge_min']:.0%} 要求)")
+            continue
+        
         if edge > 0:
             direction = "Yes"
             token_id = market.get("yes_token", "")
@@ -1383,6 +1396,9 @@ def main():
                 }
             )
             trades_made += 1
+            
+            # 🆕 记录方向决策，用于平衡追踪
+            decision_engine.record_direction(direction)
 
             # 记录到交易限额
             record_trade(position_size)
@@ -1475,6 +1491,14 @@ def main():
                     print(f"      → {rec['action']}")
     except Exception as e:
         log_error("main", e, "策略发现更新失败（非致命）")
+    
+    # 🆕 方向平衡状态
+    balance_status = decision_engine.get_balance_status()
+    print(f"\n⚖️ 方向平衡:")
+    print(f"   {balance_status['message']}")
+    if not balance_status['balanced']:
+        print(f"   ⚠️ Yes方向不足，已启用boost机制")
+    print()
     
     if len(decisions) == 0 and len(markets) > 0:
         print(f"   ⚠️ 所有市场均被跳过（去重/价格/流动性过滤）")

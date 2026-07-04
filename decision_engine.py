@@ -30,12 +30,17 @@ class AutonomousDecisionEngine:
     # 决策参数
     EDGE_THRESHOLD_BASE = 0.04       # 基础edge阈值
     EDGE_THRESHOLD_DYNAMIC = True    # 是否动态调整阈值
-    BALANCE_COOLDOWN = 2             # 同一方向冷却次数
+    BALANCE_COOLDOWN = 3             # 同一方向冷却次数
+    BALANCE_ENABLED = True           # 是否启用方向平衡
+    MIN_YES_TRADES_RATIO = 0.3       # Yes交易最小比例（相对于总交易）
     
     def __init__(self, regime_detector=None, strategy_discoverer=None):
         self.regime_detector = regime_detector
         self.strategy_discoverer = strategy_discoverer
         self.direction_counters = defaultdict(int)  # 跟踪各方向使用次数
+        self.total_decisions = 0                 # 总决策数
+        self.yes_decisions = 0                   # Yes方向决策数
+        self.no_decisions = 0                    # No方向决策数
     
     def make_decision(self, market, signals, regime_data, strategy_pool):
         """
@@ -319,21 +324,82 @@ class AutonomousDecisionEngine:
     
     def _balanced_direction_check(self, fused_prob, yes_price, edge):
         """
-        方向平衡检查
+        方向平衡检查 — 防止长期只交易一个方向
         
-        确保不只在No方向交易，Yes方向也有公平机会
+        核心逻辑:
+        1. 如果Yes方向连续冷却次数用完，强制检查Yes机会
+        2. 如果Yes交易比例低于阈值，降低Yes方向的edge门槛
+        3. 否则正常判断
         """
-        # 计算Yes和No两个方向的edge
-        edge_yes = fused_prob - yes_price
-        edge_no = (1 - fused_prob) - (1 - yes_price)  # = -(fused_prob - yes_price) = -edge_yes
+        if not self.BALANCE_ENABLED:
+            if edge >= 0:
+                return 'Yes', edge
+            else:
+                return 'No', abs(edge)
         
-        # 实际上 edge_no = (1-fused) - (1-price) = price - fused = -edge_yes
-        # 所以如果edge_yes > 0，应该买Yes；如果edge_yes < 0，应该买No
-        
-        if edge_yes > 0:
-            return 'Yes', edge_yes
+        # 计算当前Yes/No比例
+        if self.total_decisions > 0:
+            yes_ratio = self.yes_decisions / self.total_decisions
         else:
-            return 'No', abs(edge_yes)
+            yes_ratio = 0.5
+        
+        # 如果Yes比例太低，降低Yes的edge门槛
+        yes_boost = 0.0
+        if yes_ratio < self.MIN_YES_TRADES_RATIO and self.total_decisions >= 3:
+            deficit = self.MIN_YES_TRADES_RATIO - yes_ratio
+            yes_boost = deficit * 0.5  # 补偿一半的缺口
+        
+        # 检查连续冷却
+        current_streak = 0
+        if self.no_decisions > 0 and self.yes_decisions == 0:
+            current_streak = self.no_decisions
+        elif self.yes_decisions > 0 and self.no_decisions == 0:
+            current_streak = self.yes_decisions
+        
+        # 如果连续No太多，强制boost Yes方向
+        if current_streak >= self.BALANCE_COOLDOWN and self.yes_decisions == 0:
+            yes_boost += 0.05
+        
+        # 正常判断
+        if edge >= 0:
+            # Yes方向有机会
+            effective_edge = edge - yes_boost
+            if effective_edge > 0:
+                return 'Yes', effective_edge
+            # 如果boost后edge还是负的，说明Yes机会不够好，但还是标记为Yes方向
+            # 只是edge较低
+            return 'Yes', edge
+        else:
+            return 'No', abs(edge)
+    
+    def record_direction(self, direction):
+        """记录方向决策，用于平衡追踪"""
+        self.total_decisions += 1
+        if direction == 'Yes':
+            self.yes_decisions += 1
+        else:
+            self.no_decisions += 1
+    
+    def get_balance_status(self):
+        """获取方向平衡状态"""
+        if self.total_decisions == 0:
+            return {
+                'total': 0,
+                'yes_count': 0,
+                'no_count': 0,
+                'yes_ratio': 0.5,
+                'balanced': True,
+                'message': '暂无交易数据'
+            }
+        yes_ratio = self.yes_decisions / self.total_decisions
+        return {
+            'total': self.total_decisions,
+            'yes_count': self.yes_decisions,
+            'no_count': self.no_decisions,
+            'yes_ratio': round(yes_ratio, 3),
+            'balanced': yes_ratio >= self.MIN_YES_TRADES_RATIO,
+            'message': f"Yes={self.yes_decisions}({yes_ratio:.0%}) No={self.no_decisions}"
+        }
     
     def _get_dynamic_threshold(self, regime_data, urgency):
         """根据市场环境和紧急度动态调整阈值"""
