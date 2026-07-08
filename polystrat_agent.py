@@ -982,6 +982,11 @@ def main():
             disagreement = vote_details.get("disagreement", 0)
             confidence = vote_details.get("confidence", 0)
 
+            # Debate模式返回字符串confidence，转换为数字
+            if isinstance(confidence, str):
+                confidence_map = {"HIGH": 0.9, "MEDIUM": 0.6, "LOW": 0.3}
+                confidence = confidence_map.get(confidence, 0.5)
+
             # 分歧太小 = 市场已定价，无优势
             if disagreement < SWEET_SPOT_CONFIG["min_disagreement"]:
                 print(f"⏭️ 跳过 {title[:40]}... (分歧 {disagreement:.1f}% < {SWEET_SPOT_CONFIG['min_disagreement']}%)")
