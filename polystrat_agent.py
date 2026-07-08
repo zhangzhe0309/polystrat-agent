@@ -35,7 +35,6 @@ from adaptive_weights import calculate_adaptive_weights, load_trade_history, set
 from ml_optimizer import get_ml_signal
 from multi_platform import get_multiplatform_signal
 from smart_keywords import get_search_queries
-from advanced_voting import create_voting_system
 from dynamic_optimizer import (
     calculate_llm_model_weights,
     get_dynamic_price_thresholds,
@@ -63,53 +62,25 @@ from strategy_discovery import StrategyDiscoverer
 from decision_engine import AutonomousDecisionEngine, make_autonomous_decision
 
 # === 配置 ===
-# LLM Ensemble 链：双主力(reasoning) + 双辅助(快速验证)
-# Primary: MiniMax M2.7 + Nemotron 3 Super (reasoning模型，输出完整推理链)
-# Secondary: Llama 3.3 70B + GLM-5.1 (快速方向验证)
+# === LLM 配置（纯 Groq，无 NVIDIA）===
 LLM_PROVIDERS = [
     {
-        "name": "MiniMax M2.7",
-        "api_key": os.environ.get("NVIDIA_API_KEY_2", ""),
-        "base_url": "https://integrate.api.nvidia.com/v1",
-        "model": "minimaxai/minimax-m2.7",
-        "temperature": 0.5,
+        "name": "Groq Llama 3.3 70B Versatile",
+        "api_key": os.environ.get("GROQ_API_KEY", ""),
+        "base_url": "https://api.groq.com/openai/v1",
+        "model": "llama-3.3-70b-versatile",
+        "temperature": 0.3,
         "priority": 1,
         "role": "primary",
     },
-    {
-        "name": "Nemotron 3 Super",
-        "api_key": os.environ.get("NVIDIA_API_KEY", ""),
-        "base_url": "https://integrate.api.nvidia.com/v1",
-        "model": "nvidia/nemotron-3-super-120b-a12b",
-        "temperature": 0.5,
-        "priority": 2,
-        "role": "primary",
-    },
-    {
-        "name": "Llama 3.3 70B",
-        "api_key": os.environ.get("NVIDIA_API_KEY", ""),
-        "base_url": "https://integrate.api.nvidia.com/v1",
-        "model": "meta/llama-3.3-70b-instruct",
-        "temperature": 0.3,
-        "priority": 3,
-        "role": "secondary",
-    },
-    {
-        "name": "GLM-5.1",
-        "api_key": os.environ.get("GLM_API_KEY", ""),
-        "base_url": "https://open.bigmodel.cn/api/paas/v4",
-        "model": "glm-5.1",
-        "temperature": 0.4,
-        "priority": 4,
-        "role": "secondary",
-    },
 ]
 
-# 最少有效投票数（至少2票才认为分析有效）
-MIN_VALID_VOTES = 2
+# === Debate 模式开关 ===
+USE_DEBATE_MODE = True  # True=使用多空辩论, False=使用传统投票
+MIN_VALID_DEBATE_CALLS = 1  # 最少成功调用数（辩论模式）
 
-# 按优先级排序
-LLM_PROVIDERS.sort(key=lambda x: x.get("priority", 99))
+# 按优先级排序（只有一个 Groq provider，无需排序）
+# LLM_PROVIDERS.sort(key=lambda x: x.get("priority", 99))
 
 # Polymarket
 POLYMARKET_FUNDER = os.environ.get("POLYMARKET_FUNDER_ADDRESS", "")
@@ -430,8 +401,15 @@ def search_news(query, max_results=3):
 def llm_analyze_probability(
     market_title, news_context, current_yes_price, category="Other"
 ):
-    """使用多 LLM 分析市场概率，使用高级投票系统（加权+异常值过滤）"""
-    if not LLM_PROVIDERS:
+    """使用 Debate 模式分析市场概率（纯 Groq）
+    
+    返回: (llm_prob, model_results, vote_details)
+    - llm_prob: 裁判给出的概率 (0-1)
+    - model_results: 辩论日志摘要
+    - vote_details: 包含 confidence, disagreement, debate_info
+    """
+    if not os.environ.get("GROQ_API_KEY", ""):
+        log.warning("No GROQ_API_KEY set, skipping LLM analysis")
         return None, [], {}
 
     # 根据分类添加上下文
@@ -443,106 +421,58 @@ def llm_analyze_probability(
         "Geopolitics": "这是一个地缘政治市场。关注国际关系、冲突动态、外交进展。",
         "Economics": "这是一个经济市场。关注经济数据、央行政策、市场预期。",
     }
-
     context_hint = category_context.get(category, "请综合分析相关信息。")
 
-    prompt = f"""你是一个预测市场分析师。根据以下信息，判断这个预测市场事件发生的概率。
-
-市场问题: {market_title}
-市场分类: {category}
-当前市场价: Yes = {current_yes_price * 100:.0f}¢ (即市场认为有 {current_yes_price * 100:.0f}% 的概率)
-
-分析提示: {context_hint}
-
-相关新闻/背景信息:
-{news_context if news_context else "暂无相关新闻"}
-
-请分析并给出你认为的实际概率（0-100之间的整数）。
-只输出一个数字，不要解释。例如: 65"""
-
-    # 遍历所有 provider，收集概率
-    predictions_dict = {}
-    model_results = []
-    for provider in LLM_PROVIDERS:
-        api_key = provider["api_key"]
-        if not api_key:
-            continue
-
-        for attempt in range(2):
-            try:
-                resp = requests.post(
-                    f"{provider['base_url']}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": provider["model"],
-                        "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": 1000,
-                        "temperature": provider.get("temperature", 0.3),
-                    },
-                    timeout=45,
-                )
-                if resp.status_code == 429:
-                    break  # 限流，跳到下一个 provider
-                resp.raise_for_status()
-                msg = resp.json()["choices"][0]["message"]
-                # 兼容推理模型：content 可能在 reasoning_content 中
-                content = (msg.get("content") or "").strip()
-                if not content:
-                    content = (msg.get("reasoning_content") or "").strip()
-                match = re.search(r"(\d+)", content)
-                if match:
-                    prob = int(match.group(1))
-                    if 0 <= prob <= 100:
-                        predictions_dict[provider["name"]] = prob
-                        model_results.append(f"{provider['name']}:{prob}¢")
-                break  # 成功，不再重试
-            except Exception:
-                if attempt < 1:
-                    time.sleep(1)
-                    continue
-                break
-
-    # 使用高级投票系统（传入动态模型权重）
-    if predictions_dict:
-        # 获取 LLM 模型动态权重（基于历史准确率）
-        try:
-            from dynamic_optimizer import calculate_llm_model_weights
-
-            model_weights = calculate_llm_model_weights()
-        except Exception:
-            model_weights = None
-
-        voting_system = create_voting_system(model_weights=model_weights)
-        vote_result = voting_system.vote(predictions_dict)
-
-        # 最少投票数检查
-        n_votes = len(predictions_dict)
-        if n_votes < MIN_VALID_VOTES:
-            log.warning(f"LLM投票不足: {n_votes}/{MIN_VALID_VOTES} 票，跳过该市场")
-            return None, model_results, {"confidence": 0, "disagreement": 100, "need_review": True}
-
-        avg = vote_result["final_prediction"] / 100.0
-        confidence = vote_result["confidence"]
-        disagreement = vote_result["disagreement"]
-
-        # 记录投票详情
-        if vote_result["need_review"]:
-            log.warning(f"LLM投票分歧大: {disagreement:.1f}%, 置信度: {confidence:.2f}")
-
-        return (
-            avg,
-            model_results,
-            {
-                "confidence": confidence,
-                "disagreement": disagreement,
-                "need_review": vote_result["need_review"],
-            },
+    try:
+        from debate_engine import DebateEngine
+        engine = DebateEngine()
+        debate_result = engine.run_debate(
+            market_title=market_title,
+            category=category,
+            current_price=current_yes_price,
+            news_context=news_context,
+            context_hint=context_hint,
         )
 
-    return None, [], {}
+        # 裁判概率
+        llm_prob = debate_result['verdict_probability']
+        
+        # 构建 model_results 摘要
+        bull_prob = debate_result.get('bull_implied_probability', current_yes_price)
+        bear_prob = debate_result.get('bear_implied_probability', 1 - current_yes_price)
+        model_results = [
+            f"Bull:{bull_prob*100:.0f}¢",
+            f"Bear:{bear_prob*100:.0f}¢",
+            f"Judge:{llm_prob*100:.0f}¢",
+        ]
+
+        # 构建 vote_details（兼容现有代码）
+        disagreement = abs(bull_prob - bear_prob) * 100
+        vote_details = {
+            "confidence": debate_result['verdict_confidence'],
+            "disagreement": disagreement,
+            "need_review": disagreement > 40 or debate_result['verdict_confidence'] in ('LOW', 0),
+            "debate_info": {
+                "bull_argument": debate_result.get('bull_argument', '')[:200],
+                "bear_argument": debate_result.get('bear_argument', '')[:200],
+                "judge_reasoning": debate_result.get('judge_reasoning', '')[:300],
+                "key_factors": debate_result.get('key_factors', []),
+                "disagreement_intensity": debate_result.get('disagreement_intensity', 0),
+            },
+        }
+
+        log.info(f"Debate: Bull={bull_prob*100:.0f}% Bear={bear_prob*100:.0f}% Judge={llm_prob*100:.0f}%")
+        return llm_prob, model_results, vote_details
+
+    except Exception as e:
+        log.error(f"Debate analysis failed: {e}")
+        # Fallback: 直接返回市场价
+        return current_yes_price, ["Fallback:market_price"], {
+            "confidence": 0.1,
+            "disagreement": 0,
+            "need_review": True,
+            "error": str(e),
+        }
 
 
 def place_order(token_id, side, amount, price):
