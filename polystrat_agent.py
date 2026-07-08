@@ -60,6 +60,9 @@ from arbitrage_engine import scan_all_arbitrage, format_arbitrage_report
 from market_regime import detect_market_regime, format_regime_report
 from strategy_discovery import StrategyDiscoverer
 from decision_engine import AutonomousDecisionEngine, make_autonomous_decision
+from yes_bias import calculate_yes_bias_signal, get_yes_bias_prob
+from time_decay import calculate_time_decay_signal, get_time_decay_prob
+from clob_validator import validate_price_before_trade
 
 # === 配置 ===
 # === LLM 配置（纯 Groq，无 NVIDIA）===
@@ -1161,6 +1164,22 @@ def main():
         # 边界检查
         final_prob = max(0.01, min(0.99, final_prob))  # 防止极端值
 
+        # === 信号7: Yes Bias 逆向信号 ===
+        yes_bias_result = calculate_yes_bias_signal(market)
+        if yes_bias_result["strength"] != "none":
+            pre_bias = final_prob
+            final_prob += yes_bias_result["signal"]
+            final_prob = max(0.01, min(0.99, final_prob))
+            print(f"   🔄 Yes Bias: {yes_bias_result['direction'].upper()} | {yes_bias_result['reason']} | {pre_bias:.2f}→{final_prob:.2f}")
+
+        # === 信号8: 时间衰减信号 ===
+        time_decay_result = calculate_time_decay_signal(market)
+        if time_decay_result["signal"] != 0:
+            pre_decay = final_prob
+            final_prob += time_decay_result["signal"]
+            final_prob = max(0.01, min(0.99, final_prob))
+            print(f"   ⏰ 时间衰减: {time_decay_result['reason']} | {pre_decay:.2f}→{final_prob:.2f}")
+
         # 信号质量检查：超过 2 个信号回退时跳过该市场（防噪声交易）
         if signal_fallbacks >= 2:
             print(f"⏭️ 跳过 {title[:40]}... ({signal_fallbacks}/4 信号回退)")
@@ -1322,6 +1341,28 @@ def main():
             token_count = (
                 position_size / order_price if order_price > 0 else position_size
             )
+
+            # === CLOB Bid/Ask 价格校验 ===
+            # 用CLOB真实ask价替代Gamma价格，防止纸上盈利实盘亏
+            price_check = validate_price_before_trade(
+                market, direction, order_price, token_id
+            )
+            if not price_check["valid"]:
+                log.warning(f"❌ 价格校验失败: {price_check['reason']}")
+                decision["order_result"] = {
+                    "status": "PRICE_CHECK_FAILED",
+                    "reason": price_check["reason"],
+                }
+                decisions.append(decision)
+                continue
+            
+            # 用真实价格重新计算token数量
+            if price_check["real_price"] > 0 and price_check["real_price"] != order_price:
+                real_order_price = price_check["real_price"]
+                token_count = position_size / real_order_price if real_order_price > 0 else token_count
+                if abs(real_order_price - order_price) > 0.02:
+                    print(f"   ⚠️ 价格校验: Gamma={order_price:.2f}→CLOB={real_order_price:.2f} (slippage={price_check['price_slippage']:+.2f}¢)")
+
             result = place_order(token_id, "BUY", round(token_count, 2), order_price)
             decision["order_result"] = result
 
@@ -1351,6 +1392,9 @@ def main():
                     "news_sources": news_sources,
                     "end_date": market.get("end_date", ""),
                     "result": "pending",  # 初始状态：待结算
+                    "yes_bias": yes_bias_result,       # Yes Bias信号
+                    "time_decay": time_decay_result,   # 时间衰减信号
+                    "price_check": price_check,         # CLOB价格校验
                 }
             )
             trades_made += 1
