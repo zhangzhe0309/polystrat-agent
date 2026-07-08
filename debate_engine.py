@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 """
-Debate Engine — 多空辩论决策模式
+Debate Engine v2 — 多空辩论决策模式（多平台版）
 
-纯 Groq 实现，无 NVIDIA API 依赖。
-让两个 LLM 子代理分别从看多/看空角度分析市场，
-再由裁判 LLM 综合双方论点做出最终概率判断。
-
-设计原则:
-- 只使用 Groq（无限流、快速）
+核心设计:
+- Bull/Bear/Judge 分别使用不同平台API，避免单平台限流
+- 每个角色有 fallback 链：主力 → 备选1 → 备选2
+- 自动 429 重试（exponential backoff）
 - 与现有 llm_analyze_probability() 完全解耦，可独立调用
 - 输出格式兼容现有 vote_details 结构
-- 辩论过程可追溯（保存双方论点+裁判理由）
+
+API分配策略（避免同平台）:
+- Bull:  Groq Llama 3.3 70B → GitHub GPT-4o-mini → AGNES agnes-2.0-flash
+- Bear:  GitHub GPT-4o-mini → AGNES agnes-2.0-flash → Groq Llama 3.3 70B
+- Judge: AGNES agnes-2.0-flash → Groq Llama 3.3 70B → GitHub GPT-4o-mini
 
 作者: PolyStrat Team
 日期: 2026-07-08
+版本: v2.0 (多平台fallback)
 """
 
 import os
@@ -25,49 +28,231 @@ from datetime import datetime, timezone
 from polystrat_logger import log
 
 
-# === Groq API 配置 ===
-GROQ_BASE_URL = "https://api.groq.com/openai/v1"
-GROQ_BULL_MODEL = "llama-3.3-70b-versatile"
-GROQ_BEAR_MODEL = "llama-3.3-70b-versatile"
-GROQ_JUDGE_MODEL = "llama-3.3-70b-versatile"
-GROQ_TIMEOUT = 15  # 秒
+# === 多平台 Provider 配置 ===
+# 按速度排序: Groq 0.2s > AGNES 0.6s > GitHub 1.7s > NVIDIA 5.4s > OpenRouter 6.4s > GLM 17s
+
+def _load_env():
+    """加载 .env 文件中的 API keys"""
+    env_path = os.path.expanduser("~/.hermes/.env")
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    if not os.environ.get(k):
+                        os.environ[k] = v
+
+_load_env()
+
+PROVIDERS = {
+    "groq": {
+        "name": "Groq Llama 3.3 70B",
+        "base_url": "https://api.groq.com/openai/v1",
+        "model": "llama-3.3-70b-versatile",
+        "key_env": "GROQ_API_KEY",
+        "timeout": (5, 30),
+        "max_tokens": 2000,
+        "rpm_limit": 30,  # Groq free tier ~30 RPM
+    },
+    "github": {
+        "name": "GitHub GPT-4o-mini",
+        "base_url": "https://models.inference.ai.azure.com",
+        "model": "gpt-4o-mini",
+        "key_env": "GITHUB_API_KEY",
+        "timeout": (5, 30),
+        "max_tokens": 2000,
+        "rpm_limit": 60,
+    },
+    "agnes": {
+        "name": "AGNES agnes-2.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1",
+        "model": "agnes-2.0-flash",
+        "key_env": "AGNES_API_KEY",
+        "timeout": (5, 60),
+        "max_tokens": 2000,
+        "rpm_limit": 60,
+        "note": "agnes-2.0-flash 内置thinking，Bull/Bear角色需10-35s，Judge角色仅1-2s",
+    },
+    "nvidia": {
+        "name": "NVIDIA GLM-5.2",
+        "base_url": "https://integrate.api.nvidia.com/v1",
+        "model": "z-ai/glm-5.2",
+        "key_env": "NVIDIA_API_KEY_2",
+        "timeout": (5, 30),
+        "max_tokens": 2000,
+        "rpm_limit": 40,
+    },
+    "openrouter": {
+        "name": "OpenRouter Llama 3.3 70B",
+        "base_url": "https://openrouter.ai/api/v1",
+        "model": "meta-llama/llama-3.3-70b-instruct",
+        "key_env": "OPENROUTER_API_KEY",
+        "timeout": (5, 30),
+        "max_tokens": 2000,
+        "rpm_limit": 20,
+    },
+    "glm": {
+        "name": "GLM-5.1 (z.ai)",
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "model": "glm-5.1",
+        "key_env": "GLM_API_KEY",
+        "timeout": (5, 45),
+        "max_tokens": 2000,
+        "rpm_limit": 60,
+    },
+}
+
+# === 辩论角色 → 平台分配（确保不同角色用不同平台） ===
+# 策略（v5: GitHub做主力，最稳定1-2s响应，无429问题）：
+#   - Bull: GitHub GPT-4o-mini(1.7s) → NVIDIA → Groq → AGNES → OpenRouter → GLM
+#   - Bear: GitHub GPT-4o-mini(1.7s) → NVIDIA → Groq → AGNES → OpenRouter → GLM
+#   - Judge: GitHub GPT-4o-mini(1.7s) → NVIDIA → Groq → AGNES → OpenRouter → GLM
+# Bull/Bear/GitHub串行调用不会撞限流(GitHub 60RPM)，不同角色同平台OK
+# AGNES做Judge有时需30-60s(内置thinking)，放后面
+ROLE_PROVIDERS = {
+    "bull": ["github", "nvidia", "groq", "agnes", "openrouter", "glm"],
+    "bear": ["github", "nvidia", "groq", "agnes", "openrouter", "glm"],
+    "judge": ["github", "nvidia", "groq", "agnes", "openrouter", "glm"],
+}
+
+# === 429 重试配置 ===
+MAX_RETRIES = 1           # 每个provider最多重试1次（快速fallback比等待更好）
+RETRY_BASE_DELAY = 2      # 基础等待2秒
+RETRY_MAX_DELAY = 8       # 最大等待8秒
 
 
-def _get_groq_key():
-    """获取 Groq API key"""
-    return os.environ.get("GROQ_API_KEY", "")
+def _get_api_key(provider_id):
+    """获取指定provider的API key"""
+    p = PROVIDERS.get(provider_id)
+    if not p:
+        return None
+    return os.environ.get(p["key_env"], "")
 
 
-def _call_groq(messages, model=GROQ_JUDGE_MODEL, timeout=GROQ_TIMEOUT):
-    """调用 Groq API（通用函数）"""
-    api_key = _get_groq_key()
-    if not api_key:
-        raise ValueError("No GROQ_API_KEY set")
+def _call_llm(messages, provider_id, temperature=0.3, max_retries=MAX_RETRIES):
+    """
+    调用指定平台的 LLM API，带 429 重试
     
-    resp = requests.post(
-        f"{GROQ_BASE_URL}/chat/completions",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": model,
-            "messages": messages,
-            "max_tokens": 3000,
-            "temperature": 0.3,
-        },
-        timeout=(3, timeout),
-    )
-    resp.raise_for_status()
-    msg = resp.json()["choices"][0]["message"]
-    content = (msg.get("content") or "").strip()
-    if not content:
-        content = (msg.get("reasoning_content") or "").strip()
-    return content
+    Args:
+        messages: OpenAI 格式的消息列表
+        provider_id: provider ID (e.g., "groq", "github")
+        temperature: 生成温度
+        max_retries: 最大重试次数
+    
+    Returns:
+        str: LLM 返回的文本内容
+    
+    Raises:
+        ValueError: 无 API key
+        requests.HTTPError: 非429错误或重试耗尽
+    """
+    p = PROVIDERS.get(provider_id)
+    if not p:
+        raise ValueError(f"Unknown provider: {provider_id}")
+    
+    api_key = _get_api_key(provider_id)
+    if not api_key:
+        raise ValueError(f"No API key for {provider_id} ({p['key_env']})")
+    
+    last_error = None
+    for attempt in range(max_retries + 1):
+        try:
+            resp = requests.post(
+                f"{p['base_url']}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": p["model"],
+                    "messages": messages,
+                    "max_tokens": p["max_tokens"],
+                    "temperature": temperature,
+                },
+                timeout=p["timeout"],
+            )
+            
+            if resp.status_code == 429:
+                # 429限流 — 只重试1次，快速fallback更好
+                if attempt < max_retries:
+                    delay = min(RETRY_BASE_DELAY * (2 ** attempt), RETRY_MAX_DELAY)
+                    log.warning(f"{p['name']} 429限流, 等待{delay:.0f}s 后重试")
+                    time.sleep(delay)
+                    continue
+                else:
+                    # 重试耗尽，直接抛出让fallback链接管
+                    log.warning(f"{p['name']} 429限流，重试耗尽，fallback")
+                    resp.raise_for_status()
+            
+            # 非429的HTTP错误，直接抛出（不需要重试）
+            resp.raise_for_status()
+            
+            data = resp.json()
+            msg = data["choices"][0]["message"]
+            content = (msg.get("content") or "").strip()
+            if not content:
+                content = (msg.get("reasoning_content") or "").strip()
+            return content
+            
+        except requests.HTTPError as e:
+            last_error = e
+            status = getattr(resp, 'status_code', 0)
+            if status == 429 and attempt < max_retries:
+                continue
+            raise
+        except (requests.Timeout, requests.ConnectionError) as e:
+            last_error = e
+            # 超时/连接错误只重试1次
+            if attempt < max_retries:
+                log.warning(f"{p['name']} 超时，重试 {attempt+1}/{max_retries}")
+                time.sleep(1)
+                continue
+            raise
+        except Exception as e:
+            last_error = e
+            raise
+    
+    raise last_error or RuntimeError("Unexpected retry loop exit")
+
+
+def _call_with_fallback(messages, role, temperature=0.3):
+    """
+    按角色 fallback 链调用 LLM
+    
+    Args:
+        messages: 消息列表
+        role: "bull", "bear", 或 "judge"
+        temperature: 生成温度
+    
+    Returns:
+        tuple: (content, provider_id, error)
+    """
+    provider_chain = ROLE_PROVIDERS.get(role, ["groq", "github", "agnes"])
+    errors = []
+    
+    for pid in provider_chain:
+        api_key = _get_api_key(pid)
+        if not api_key:
+            errors.append(f"{pid}: no key")
+            continue
+        
+        try:
+            content = _call_llm(messages, pid, temperature)
+            return content, pid, None
+        except Exception as e:
+            p = PROVIDERS[pid]
+            err_msg = f"{p['name']}: {type(e).__name__}"
+            log.warning(f"Debate {role} fallback: {err_msg}")
+            errors.append(err_msg)
+            continue
+    
+    # 所有 provider 都失败
+    return None, None, "; ".join(errors)
 
 
 class DebateEngine:
-    """多空辩论决策引擎"""
+    """多空辩论决策引擎 v2（多平台版）"""
     
     def __init__(self, temperature=0.3):
         self.temperature = temperature
@@ -86,31 +271,38 @@ class DebateEngine:
         
         Returns:
             dict: {
-                'verdict_probability': float,    # 裁判给出的概率 (0-1)
-                'verdict_confidence': float,     # 裁判置信度 (0-1)
-                'bull_argument': str,            # 看多方论点摘要
-                'bear_argument': str,            # 看空方论点摘要
-                'judge_reasoning': str,          # 裁判推理过程
-                'key_factors': list,             # 关键影响因素
-                'disagreement_intensity': float, # 双方分歧强度 (0-1)
-                'debate_log': list,              # 完整辩论日志（调试用）
+                'verdict_probability': float,
+                'verdict_confidence': float/str,
+                'bull_argument': str,
+                'bear_argument': str,
+                'judge_reasoning': str,
+                'key_factors': list,
+                'disagreement_intensity': float,
+                'debate_log': list,
+                'bull_implied_probability': float,
+                'bear_implied_probability': float,
+                'providers_used': dict,  # 新增: 记录用了哪些平台
             }
         """
         debate_log = []
+        providers_used = {}
         
         # Step 1: Bull Agent 分析
-        bull_result = self._analyze_bull(market_title, category, current_price, 
+        bull_result = self._analyze_bull(market_title, category, current_price,
                                           news_context, context_hint, debate_log)
+        providers_used["bull"] = bull_result.get("provider", "unknown")
         
         # Step 2: Bear Agent 分析
         bear_result = self._analyze_bear(market_title, category, current_price,
                                           news_context, context_hint, debate_log)
+        providers_used["bear"] = bear_result.get("provider", "unknown")
         
         # Step 3: Judge 综合裁决
         judge_result = self._judge_debate(
             market_title, category, current_price,
             bull_result, bear_result, news_context, context_hint, debate_log
         )
+        providers_used["judge"] = judge_result.get("provider", "unknown")
         
         # 计算分歧强度
         bull_prob = bull_result.get('implied_probability', current_price)
@@ -126,9 +318,9 @@ class DebateEngine:
             'key_factors': judge_result.get('key_factors', []),
             'disagreement_intensity': disagreement_intensity,
             'debate_log': debate_log,
-            # 附加字段供测试脚本使用
             'bull_implied_probability': bull_prob,
             'bear_implied_probability': bear_prob,
+            'providers_used': providers_used,
         }
     
     def _analyze_bull(self, market_title, category, current_price,
@@ -171,51 +363,48 @@ HIGH / MEDIUM / LOW（基于证据充分程度）
 - 即使市场定价已经很高，也要诚实评估
 - 只输出上述格式内容，不要额外解释"""
 
-        try:
-            content = _call_groq(
-                [{"role": "user", "content": prompt}],
-                model=GROQ_BULL_MODEL,
-            )
-            
-            # 解析概率
-            prob_match = re.search(r'PROB:(\d+)', content)
-            probability = int(prob_match.group(1)) if prob_match else 65
-            
-            # 解析信心
-            confidence = 'MEDIUM'
-            if 'HIGH' in content.split('信心水平')[-1][:20]:
-                confidence = 'HIGH'
-            elif 'LOW' in content.split('信心水平')[-1][:20]:
-                confidence = 'LOW'
-            
-            result = {
-                'role': 'bull',
-                'full_text': content,
-                'summary': content[:500] + "..." if len(content) > 500 else content,
-                'implied_probability': probability / 100.0,
-                'confidence': confidence,
-                'success': True,
-            }
-            
-            debate_log[-1].update({
-                'probability': probability,
-                'confidence': confidence,
-                'success': True,
-            })
-            
-            return result
-            
-        except Exception as e:
-            log.error(f"Bull Agent 失败: {e}")
-            debate_log[-1].update({'success': False, 'error': str(e)})
+        content, provider_id, error = _call_with_fallback(
+            [{"role": "user", "content": prompt}], "bull", self.temperature
+        )
+        
+        if error:
+            log.error(f"Bull Agent 全部失败: {error}")
+            debate_log[-1].update({'success': False, 'error': error})
             return {
                 'role': 'bull',
                 'full_text': '',
-                'summary': f'Bull分析失败: {e}',
+                'summary': f'Bull分析失败: {error}',
                 'implied_probability': current_price,
                 'confidence': 'LOW',
                 'success': False,
+                'provider': 'none',
             }
+        
+        # 解析概率
+        prob_match = re.search(r'PROB:(\d+)', content)
+        probability = int(prob_match.group(1)) if prob_match else 65
+        
+        # 解析信心
+        confidence = _parse_confidence(content)
+        
+        result = {
+            'role': 'bull',
+            'full_text': content,
+            'summary': content[:500] + "..." if len(content) > 500 else content,
+            'implied_probability': probability / 100.0,
+            'confidence': confidence,
+            'success': True,
+            'provider': provider_id,
+        }
+        
+        debate_log[-1].update({
+            'probability': probability,
+            'confidence': confidence,
+            'success': True,
+            'provider': provider_id,
+        })
+        
+        return result
     
     def _analyze_bear(self, market_title, category, current_price,
                       news_context, context_hint, debate_log):
@@ -257,52 +446,49 @@ HIGH / MEDIUM / LOW（基于证据充分程度）
 - 即使市场定价很低，也要诚实评估
 - 只输出上述格式内容，不要额外解释"""
 
-        try:
-            content = _call_groq(
-                [{"role": "user", "content": prompt}],
-                model=GROQ_BEAR_MODEL,
-            )
-            
-            # 解析概率（注意：这里是NOT发生的概率）
-            prob_match = re.search(r'PROBA:(\d+)', content)
-            proba_not = int(prob_match.group(1)) if prob_match else 60
-            implied_yes = (100 - proba_not) / 100.0
-            
-            # 解析信心
-            confidence = 'MEDIUM'
-            if 'HIGH' in content.split('信心水平')[-1][:20]:
-                confidence = 'HIGH'
-            elif 'LOW' in content.split('信心水平')[-1][:20]:
-                confidence = 'LOW'
-            
-            result = {
-                'role': 'bear',
-                'full_text': content,
-                'summary': content[:500] + "..." if len(content) > 500 else content,
-                'implied_probability': implied_yes,
-                'confidence': confidence,
-                'success': True,
-            }
-            
-            debate_log[-1].update({
-                'implied_yes_probability': round(implied_yes, 3),
-                'confidence': confidence,
-                'success': True,
-            })
-            
-            return result
-            
-        except Exception as e:
-            log.error(f"Bear Agent 失败: {e}")
-            debate_log[-1].update({'success': False, 'error': str(e)})
+        content, provider_id, error = _call_with_fallback(
+            [{"role": "user", "content": prompt}], "bear", self.temperature
+        )
+        
+        if error:
+            log.error(f"Bear Agent 全部失败: {error}")
+            debate_log[-1].update({'success': False, 'error': error})
             return {
                 'role': 'bear',
                 'full_text': '',
-                'summary': f'Bear分析失败: {e}',
+                'summary': f'Bear分析失败: {error}',
                 'implied_probability': 1 - current_price,
                 'confidence': 'LOW',
                 'success': False,
+                'provider': 'none',
             }
+        
+        # 解析概率（注意：这里是NOT发生的概率）
+        prob_match = re.search(r'PROBA:(\d+)', content)
+        proba_not = int(prob_match.group(1)) if prob_match else 60
+        implied_yes = (100 - proba_not) / 100.0
+        
+        # 解析信心
+        confidence = _parse_confidence(content)
+        
+        result = {
+            'role': 'bear',
+            'full_text': content,
+            'summary': content[:500] + "..." if len(content) > 500 else content,
+            'implied_probability': implied_yes,
+            'confidence': confidence,
+            'success': True,
+            'provider': provider_id,
+        }
+        
+        debate_log[-1].update({
+            'implied_yes_probability': round(implied_yes, 3),
+            'confidence': confidence,
+            'success': True,
+            'provider': provider_id,
+        })
+        
+        return result
     
     def _judge_debate(self, market_title, category, current_price,
                       bull_result, bear_result, news_context, context_hint, debate_log):
@@ -351,50 +537,45 @@ HIGH / MEDIUM / LOW
 - 如果双方都有合理之处，给出一个折中的概率
 - 只输出上述格式内容"""
 
-        try:
-            content = _call_groq(
-                [{"role": "user", "content": prompt}],
-                model=GROQ_JUDGE_MODEL,
-            )
-            
-            # 解析概率
-            prob_match = re.search(r'VERDICT:(\d+)', content)
-            probability = prob_match.group(1) if prob_match else None
-            probability = int(probability) / 100.0 if probability else 0.5
-            
-            # 解析信心
-            confidence = 'MEDIUM'
-            if 'HIGH' in content.split('信心水平')[-1][:20]:
-                confidence = 'HIGH'
-            elif 'LOW' in content.split('信心水平')[-1][:20]:
-                confidence = 'LOW'
-            
-            # 解析关键因素
-            factors_section = content.split('【关键因素】')[-1] if '【关键因素】' in content else ''
-            key_factors = [f.strip() for f in factors_section.split(',') if f.strip()]
-            
-            result = {
-                'role': 'judge',
-                'reasoning': content,
-                'probability': probability,
-                'confidence': confidence,
-                'key_factors': key_factors[:3],
-                'success': True,
-            }
-            
-            debate_log[-1].update({
-                'verdict_probability': probability,
-                'confidence': confidence,
-                'key_factors': key_factors[:3],
-                'success': True,
-            })
-            
-            return result
-            
-        except Exception as e:
-            log.error(f"Judge Agent 失败: {e}")
-            debate_log[-1].update({'success': False, 'error': str(e)})
+        content, provider_id, error = _call_with_fallback(
+            [{"role": "user", "content": prompt}], "judge", self.temperature
+        )
+        
+        if error:
+            log.error(f"Judge Agent 全部失败: {error}")
             return self._judge_fallback(bull_result, bear_result, current_price, debate_log)
+        
+        # 解析概率
+        prob_match = re.search(r'VERDICT:(\d+)', content)
+        probability = prob_match.group(1) if prob_match else None
+        probability = int(probability) / 100.0 if probability else 0.5
+        
+        # 解析信心
+        confidence = _parse_confidence(content)
+        
+        # 解析关键因素
+        factors_section = content.split('【关键因素】')[-1] if '【关键因素】' in content else ''
+        key_factors = [f.strip() for f in factors_section.split(',') if f.strip()]
+        
+        result = {
+            'role': 'judge',
+            'reasoning': content,
+            'probability': probability,
+            'confidence': confidence,
+            'key_factors': key_factors[:3],
+            'success': True,
+            'provider': provider_id,
+        }
+        
+        debate_log[-1].update({
+            'verdict_probability': probability,
+            'confidence': confidence,
+            'key_factors': key_factors[:3],
+            'success': True,
+            'provider': provider_id,
+        })
+        
+        return result
     
     def _judge_fallback(self, bull_result, bear_result, current_price, debate_log):
         """Judge 失败时的 fallback：使用 Bull/Bear 加权平均"""
@@ -430,6 +611,7 @@ HIGH / MEDIUM / LOW
             'confidence': 'MEDIUM',
             'key_factors': ['Bull/Bear 加权平均 (Judge fallback)'],
             'success': True,
+            'provider': 'fallback',
         }
         
         debate_log[-1].update({
@@ -444,10 +626,21 @@ HIGH / MEDIUM / LOW
         return result
 
 
+def _parse_confidence(text):
+    """从文本中解析信心水平"""
+    # 找信心水平附近的文本
+    parts = text.split('信心水平')
+    if len(parts) > 1:
+        tail = parts[-1][:30]
+        if 'HIGH' in tail:
+            return 'HIGH'
+        elif 'LOW' in tail:
+            return 'LOW'
+    return 'MEDIUM'
+
+
 def create_voting_system(model_weights=None):
-    """
-    创建 Debate 投票系统（兼容现有接口）
-    """
+    """创建 Debate 投票系统（兼容现有接口）"""
     return DebateEngine()
 
 
