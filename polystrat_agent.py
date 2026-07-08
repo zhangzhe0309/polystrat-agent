@@ -98,7 +98,7 @@ SWEET_SPOT_CONFIG = {
     "min_price": 0.05,      # 最低 5¢（扩大到低价市场，捕捉更多机会）
     "max_price": 0.40,      # 最高 40¢（扩大范围）
     "min_liquidity": 15000, # 最低流动性 $15k（稍微放宽）
-    "min_disagreement": 15, # 最低投票分歧 15%（市场有争议）
+    "min_disagreement": 5,  # 最低投票分歧 5%（Debate模式Bull/Bear分歧通常10-15%）
     "max_disagreement": 40, # 最高投票分歧 40%（避免噪声）
     "min_confidence": 0.6,  # 最低投票置信度 60%
     "preferred_categories": ["Politics", "Sports", "Crypto", "Economics"],
@@ -149,6 +149,14 @@ TRADE_LOG = (
 set_adaptive_log_path(TRADE_LOG)
 set_settlement_log_path(TRADE_LOG)
 set_risk_log_path(TRADE_LOG)
+
+
+def _normalize_confidence(confidence):
+    """将Debate模式返回的字符串confidence转为数字"""
+    if isinstance(confidence, (int, float)):
+        return float(confidence)
+    confidence_map = {"HIGH": 0.9, "MEDIUM": 0.6, "LOW": 0.3}
+    return confidence_map.get(str(confidence).upper(), 0.5)
 
 
 def fetch_active_markets(limit=50):
@@ -612,6 +620,9 @@ def format_output(decisions, edge_threshold=None):
         vote_details = d.get("vote_details", {})
         if vote_details:
             vconf = vote_details.get("confidence", 0)
+            # Debate模式返回字符串confidence，转换
+            if isinstance(vconf, str):
+                vconf = _normalize_confidence(vconf)
             vdis = vote_details.get("disagreement", 0)
             lines.append(f"   投票置信: {vconf:.2f} | 分歧: {vdis:.1f}")
         # 显示风险检查
@@ -845,6 +856,16 @@ def main():
         category = market.get("category", "Other")
         liquidity = market.get("liquidity", 0)
         condition_id = market.get("condition_id", "")  # 唯一标识，用于去重
+        # 提前解析 token_id（微观结构信号需要）
+        yes_token_id = market.get("yes_token", "")
+        no_token_id = market.get("no_token", "")
+        token_id = yes_token_id  # 默认用 yes_token，下单时按方向切换
+
+        # 初始化信号默认值（避免后续引用未定义变量）
+        microstructure_signal = {"recommendation": "hold", "confidence": 0.3}
+        microstructure_signal_prob = 0.5
+        onchain_signal = {"recommendation": "hold", "confidence": 0.3}
+        onchain_signal_prob = 0.5
 
         # 甜蜜点模式：聚焦高胜率区间
         if SWEET_SPOT_MODE:
@@ -984,8 +1005,7 @@ def main():
 
             # Debate模式返回字符串confidence，转换为数字
             if isinstance(confidence, str):
-                confidence_map = {"HIGH": 0.9, "MEDIUM": 0.6, "LOW": 0.3}
-                confidence = confidence_map.get(confidence, 0.5)
+                confidence = _normalize_confidence(confidence)
 
             # 分歧太小 = 市场已定价，无优势
             if disagreement < SWEET_SPOT_CONFIG["min_disagreement"]:
@@ -1169,6 +1189,9 @@ def main():
 
         # 7. 风险检查（使用投票置信度，而非情感置信度）
         voting_confidence = vote_details.get("confidence", sentiment_confidence)
+        # Debate模式返回字符串confidence，转换为数字
+        if isinstance(voting_confidence, str):
+            voting_confidence = _normalize_confidence(voting_confidence)
         should_trade_flag, risk_reason = should_trade(
             market,
             confidence=voting_confidence,
