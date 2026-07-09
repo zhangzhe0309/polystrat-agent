@@ -63,6 +63,8 @@ from decision_engine import AutonomousDecisionEngine, make_autonomous_decision
 from yes_bias import calculate_yes_bias_signal, get_yes_bias_prob
 from time_decay import calculate_time_decay_signal, get_time_decay_prob
 from clob_validator import validate_price_before_trade
+from guard_rail import guard_rail_check, check_correlation_exposure, check_volatility_filter, GUARDRAIL_CONFIG
+from judge_weights import get_judge_weight, get_all_judge_weights, format_judge_weight_report, JUDGE_WEIGHT_CONFIG
 
 # === 配置 ===
 # === LLM 配置（纯 Groq，无 NVIDIA）===
@@ -1211,6 +1213,16 @@ def main():
         # Debate模式返回字符串confidence，转换为数字
         if isinstance(voting_confidence, str):
             voting_confidence = _normalize_confidence(voting_confidence)
+        
+        # 🆕 Judge动态权重：根据类别历史准确率调整置信度
+        judge_weight = get_judge_weight(category, TRADE_LOG)
+        if judge_weight != 1.0:
+            pre_weight = voting_confidence
+            # 权重>1放大置信度（远离0.5），权重<1缩小（靠近0.5）
+            voting_confidence = 0.5 + (voting_confidence - 0.5) * judge_weight
+            voting_confidence = max(0.1, min(0.95, voting_confidence))
+            if abs(judge_weight - 1.0) > 0.1:
+                print(f"   ⚖️ Judge权重: ×{judge_weight:.1f} ({category}) | 置信度 {pre_weight:.2f}→{voting_confidence:.2f}")
         should_trade_flag, risk_reason = should_trade(
             market,
             confidence=voting_confidence,
@@ -1277,19 +1289,35 @@ def main():
             and should_trade_flag
             and not STOP_LOSS_TRIGGERED
         ):
-            # 检查断路器
-            try:
-                breaker_ok = check_breaker()
-            except Exception as e:
-                log_error("breaker", e, "断路器检查失败")
-                breaker_ok = False  # 断路器异常时禁止交易（fail-closed，保护资金安全）
-            if not breaker_ok:
-                log.warning("断路器已断开，跳过交易")
-                decision["order_result"] = {"status": "BLOCKED", "reason": "断路器断开"}
+            # === 🆕 统一守门检查 (GuardRail) ===
+            # 替代分散的circuit_breaker + trade_limits + CLOB校验
+            guard_context = {
+                "existing_positions": decisions,  # 本次运行已有的决策
+                "regime_data": regime_data,
+                "balance": balance,
+                "trade_size": balance * 0.05,  # 预估最大仓位
+                "direction": direction,
+                "token_id": token_id,
+                "intended_price": order_price,
+                "confidence": voting_confidence,
+                "edge": edge,
+            }
+            guard_result = guard_rail_check(market, guard_context)
+            
+            if not guard_result["approved"]:
+                log.warning(f"🛡️ 守门拒绝: {guard_result['block_reason']}")
+                decision["order_result"] = {
+                    "status": "GUARD_BLOCKED",
+                    "reason": guard_result["block_reason"],
+                }
+                decision["guard_rail"] = guard_result
                 decisions.append(decision)
                 continue
+            
+            # 波动率仓位缩放
+            vol_scale = guard_result.get("position_scale", 1.0)
 
-            # 计算仓位大小（Fractional Kelly + 投票置信度 + 流动性适配）
+            # 计算仓位大小（Fractional Kelly + 投票置信度 + 流动性适配 + 波动率缩放）
             # Kelly 公式: f* = edge / (1 - market_price) for Yes bets
             kelly_fraction = 0.25  # 25% Kelly 保守策略
             if direction == "Yes":
@@ -1307,10 +1335,10 @@ def main():
             else:
                 liquidity_factor = max(0.3, liquidity / 10000)
 
-            # 最终仓位 = min(Kelly × 流动性调整, 硬上限)
-            # trade_limits.check_trade_allowed 进一步限制单笔≤$10、仓位≤5%
+            # 最终仓位 = min(Kelly × 流动性调整 × 波动率缩放, 硬上限)
+            # GuardRail 已包含 trade_limits 检查，这里只做仓位计算
             position_size = min(
-                kelly_position * liquidity_factor,
+                kelly_position * liquidity_factor * vol_scale,
                 balance * 0.05,
                 LIMITS_CONFIG["max_single_trade"],
             )
@@ -1328,14 +1356,7 @@ def main():
                 continue
             position_size = round(position_size, 2)
 
-            # 检查交易限额（模拟盘模式跳过持仓限额）
-            if not DRY_RUN:
-                allowed, limit_reason = check_trade_allowed(position_size, balance)
-                if not allowed:
-                    log.warning(f"交易限额拒绝: {limit_reason}")
-                    decision["order_result"] = {"status": "BLOCKED", "reason": limit_reason}
-                    decisions.append(decision)
-                    continue
+            # (trade_limits 已在 GuardRail 中检查，此处不再重复)
 
             # Kelly 计算出的是美元金额，CLOB 需要代币数量（shares）
             token_count = (
@@ -1479,6 +1500,13 @@ def main():
     if auto_skipped > 0:
         print(f"   自主引擎跳过: {auto_skipped} 个市场")
     print(f"   耗时: {elapsed:.1f} 秒")
+    
+    # 🆕 Judge动态权重报告
+    try:
+        judge_report = format_judge_weight_report(TRADE_LOG)
+        print(f"\n{judge_report}")
+    except Exception:
+        pass
     
     # 🆕 策略发现更新
     try:
