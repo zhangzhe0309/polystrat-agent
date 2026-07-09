@@ -81,15 +81,12 @@ def calculate_category_accuracy(trade_log_path, min_samples=None):
         direction = trade.get("direction", "")
         final_prob = trade.get("final_prob", 0.5)
         
-        # 判断预测是否正确
-        # final_prob > 0.5 → 预测Yes，final_prob <= 0.5 → 预测No
+        # 判断预测是否正确: 预测方向需与实际结果一致
         predicted_yes = final_prob > 0.5
-        
         if result == "won":
-            # 判断预测方向是否与结果一致
-            is_correct = True
+            is_correct = predicted_yes  # 赢了说明预测Yes方向对了
         elif result == "lost":
-            is_correct = False
+            is_correct = not predicted_yes  # 输了说明预测No方向对了
         else:
             continue
         

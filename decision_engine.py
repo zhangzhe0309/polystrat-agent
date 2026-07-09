@@ -108,7 +108,7 @@ class AutonomousDecisionEngine:
         liquidity = market.get('liquidity', 0)
         if liquidity < 5000:
             result['suitable'] = False
-            result['reason'] = f'流动性过低 (${liquacy:,.0f})'
+            result['reason'] = f'流动性过低 (${liquidity:,.0f})'
             return result
         
         # 高风险环境降低阈值或跳过
@@ -362,10 +362,10 @@ class AutonomousDecisionEngine:
         
         # 正常判断
         if edge >= 0:
-            # Yes方向有机会
-            effective_edge = edge - yes_boost
-            if effective_edge > 0:
-                return 'Yes', effective_edge
+            # Yes方向有机会 — boost 降低门槛，让 edge 更容易通过阈值
+            boosted_edge = edge + yes_boost
+            if boosted_edge > 0:
+                return 'Yes', boosted_edge
             # 如果boost后edge还是负的，说明Yes机会不够好，但还是标记为Yes方向
             # 只是edge较低
             return 'Yes', edge

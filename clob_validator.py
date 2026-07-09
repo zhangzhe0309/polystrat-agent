@@ -204,7 +204,7 @@ def validate_price_before_trade(market, intended_direction, intended_price, toke
     if intended_direction == "Yes":
         real_price = orderbook["best_ask"] if orderbook["best_ask"] > 0 else intended_price
     else:
-        real_price = orderbook["best_ask"] if orderbook["best_ask"] > 0 else intended_price
+        real_price = orderbook["best_bid"] if orderbook["best_bid"] > 0 else intended_price
     
     spread_pct = orderbook["spread_pct"]
     price_slippage = real_price - intended_price

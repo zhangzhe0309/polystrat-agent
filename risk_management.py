@@ -17,7 +17,7 @@ from constants import DEFAULT_BALANCE
 # 配置
 STOP_LOSS_THRESHOLD = 0.10  # 最大累计回撤10%（正数，与 drawdown_pct 比较）
 MAX_POSITION_SIZE = 0.05  # 单笔最大5%资金
-MAX_TOTAL_POSITION = 0.30  # 总仓位最大30%
+MAX_TOTAL_POSITION = 0.25  # 总仓位最大25%（与止损敞口阈值一致）
 MAX_SAME_CATEGORY = 0.20  # 同一类别最大20%
 MAX_SAME_MARKET = 0.10  # 同一市场最大10%
 
