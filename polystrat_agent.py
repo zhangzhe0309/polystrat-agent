@@ -103,7 +103,7 @@ SWEET_SPOT_CONFIG = {
     "min_price": 0.05,      # 最低 5¢（扩大到低价市场，捕捉更多机会）
     "max_price": 0.90,      # 🔧 v4.2: 0.40→0.90，允许Yes Bias逆向入场（Yes>70%）
     "min_liquidity": 15000, # 最低流动性 $15k（稍微放宽）
-    "min_disagreement": 5,  # 最低投票分歧 5%（Debate模式Bull/Bear分歧通常10-15%）
+    "min_disagreement": 3,  # 🔧 5%→3% (实测LLM分歧≤1.8%，5%误杀；见 sr-improvement-plan.md)
     "max_disagreement": 40, # 最高投票分歧 40%（避免噪声）
     "min_confidence": 0.50, # 🔧 v4.2: 0.60→0.50，匹配should_trade阈值
     "preferred_categories": ["Politics", "Sports", "Crypto", "Economics", "Technology"],
@@ -853,9 +853,10 @@ def main():
     # 🔧 过滤漏斗诊断：统计每个市场被哪道关卡拦住（定位0下单根因）
     from collections import defaultdict
     filter_stats = defaultdict(int)
-    price_filtered = []      # 被价格区间过滤的 yes_price 样本
-    liquidity_filtered = []  # 被流动性过滤的样本
-    category_filtered = []   # 被类别过滤的类别名（诊断分布）
+    price_filtered = []          # 被价格区间过滤的 yes_price 样本
+    liquidity_filtered = []      # 被流动性过滤的样本
+    category_filtered = []       # 被类别过滤的类别名（诊断分布）
+    disagreement_filtered = []   # 被分歧阈值过滤的实际分歧值（诊断分布）
 
     for market in markets:
         # 全局超时检查：超过 900 秒硬截断（15分钟）
@@ -1036,6 +1037,7 @@ def main():
             # 分歧太小 = 市场已定价，无优势
             if disagreement < SWEET_SPOT_CONFIG["min_disagreement"]:
                 filter_stats['low_disagreement'] += 1
+                disagreement_filtered.append(disagreement)
                 print(f"⏭️ 跳过 {title[:40]}... (分歧 {disagreement:.1f}% < {SWEET_SPOT_CONFIG['min_disagreement']}%)")
                 continue
 
@@ -1603,6 +1605,9 @@ def main():
         from collections import Counter
         _cat_dist = dict(Counter(category_filtered))
         print(f"   💡 类别过滤分布: {_cat_dist} (白名单 {SWEET_SPOT_CONFIG['preferred_categories']})")
+    if disagreement_filtered:
+        _dvals = sorted(disagreement_filtered)
+        print(f"   💡 分歧不足样本: {[f'{d:.1f}%' for d in _dvals]} (阈值 {SWEET_SPOT_CONFIG['min_disagreement']}%)")
 
 
 if __name__ == "__main__":
