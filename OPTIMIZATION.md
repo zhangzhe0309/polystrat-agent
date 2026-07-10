@@ -168,7 +168,8 @@
 | 第9轮 | 1 | 4 | 新闻源优化（RSS源扩展+解析优化） |
 | 第10轮 | 1 | 6 | 链上信号优化（置信度提升+多因子） |
 | 第11轮 | 1 | 8 | 情感分析优化（词汇扩展+权重+否定词+程度词） |
-| **合计** | **15** | **57** | **核心逻辑缺陷全部修复 + 策略优化 + 信号增强 + ML优化 + 新闻源优化 + 链上信号优化 + 情感分析优化** |
+| 第12轮 | 3+1测试 | 4 | 决策评审修复（Judge权重激活+套利稀释+双路径消除） |
+| **合计** | **18** | **61** | **核心逻辑缺陷全部修复 + 策略优化 + 信号增强 + ML优化 + 新闻源优化 + 链上信号优化 + 情感分析优化 + 决策评审修复** |
 
 ---
 
@@ -798,3 +799,53 @@ confidence = min(1, total_words / 5)  # 5个词汇达到最高置信度
 - 否定词处理能力提升（not good → 负面）
 - 程度词处理能力提升（very good → 强正面）
 - 预测市场相关性提升（专用词汇）
+
+---
+
+## 第十二轮优化 — 决策方案评审修复（3 文件 + 1 测试，4 项修改）
+
+> 2026-07-10 基于 Polymarket 高级交易员视角的决策方案评审，修复 1 个静默失效的 P0 故障 + 双决策路径冲突。
+
+### 51. judge_weights.py — result 字符串不匹配（P0，特性静默失效）
+- **根因**：检查 `"won"/"lost"`，但 settlement_tracker 实际写入 `"win"/"lose"`
+- **后果**：所有已结算交易落入 else 分支被跳过，样本恒为 0 → `get_judge_weight()` 永远返回 1.0 → v4.2 的"Judge 动态权重"特性完全是死代码
+- **修复**：`result not in ("win", "lose")` 过滤，匹配生产日志格式
+- **验证**：补 8 个回归测试（test_judge_weights.py），生产格式下 Sports 80%→×1.2、Crypto 10%→×0.7
+
+### 52. judge_weights.py — 正确性代理逻辑错误（P0）
+- **根因**：`predicted_yes = final_prob > 0.5`，但交易方向由 `final_prob > yes_price` 决定
+- **后果**：direction=No 且获胜的交易（如 final_prob=0.4, yes_price=0.6）被误判为"预测错误"，系统性低估 No 获胜类别的 Judge 权重
+- **修复**：直接用 `result == "win"` 判定（settlement_tracker.determine_trade_result 基于 direction==market_outcome 推导 result，故 win 即方向命中），移除 final_prob 依赖
+- **原则**：KISS — 正确性信息已蕴含在 result 中，无需二次推导
+
+### 53. polystrat_agent.py — 套利信号固定稀释（P2）
+- **根因**：套利信号恒=0.5（有无套利两分支相同），却以 5% 权重参与概率融合
+- **后果**：将 final_prob 固定拉向 0.5，稀释真实信号（全 0.9 信号被拉到 ~0.87）
+- **修复**：从概率融合移除（套利不表达事件概率），套利机会仍通过 has_arbitrage/arbitrage_opportunities 独立用于展示与记录
+- **效果**：LLM 有效权重 29.6%→31.3%，信号忠实度恢复
+
+### 54. decision_engine.py — 双决策路径冲突（P1，方案A 重构）
+- **根因**：AutonomousDecisionEngine 有独立的 phase3 信号重融合 + phase4 阈值决策，但主循环只用其 skip 门禁，导致：
+  - fused_prob/fused_edge 计算后无消费方（冗余）
+  - 独立阈值与 legacy edge_threshold 可能矛盾
+  - 方向平衡 boost 无消费方（主循环自定方向）
+- **修复（方案A）**：engine 退化为 regime 感知风控门禁
+  - 移除 phase3 信号重融合、phase4 独立阈值、方向平衡 boost、策略选择（均无消费方）
+  - 保留 phase1 regime 风控（流动性硬下限）、urgency/slippage 计算、方向计数（可解释性）
+  - 主程序清理 signals_for_engine 构建（engine 不再消费 signals）
+- **效果**：496→240 行（-52%），单一决策路径（legacy），engine 职责清晰为"额外风控层"
+- **保留接口契约**：make_decision/record_direction/get_balance_status 不变
+
+---
+
+## 本轮验证
+
+| 检查项 | 状态 | 说明 |
+|--------|------|------|
+| 语法检查 | ✅ | decision_engine.py / polystrat_agent.py / judge_weights.py / test_judge_weights.py |
+| 回归测试 | ✅ | test_judge_weights 8/8 通过（含 No方向获胜、生产格式、边界场景） |
+| 模块自测 | ✅ | judge_weights（Sports×1.2/Crypto×0.7）、decision_engine（3场景） |
+| 残留引用 | ✅ | ARBITRAGE_WEIGHT / signals_for_engine 已清除 |
+| 权重数学 | ✅ | 归一化正确（adaptive 样本不足时 total≈1.15/LLM≈31%，样本充足时 total≈0.92/LLM≈29%），消除套利 0.5 稀释 |
+
+⚠️ test_polystrat.py 的 29 errors 全部为 fcntl（Unix 专用模块）在 Windows 的环境问题，与本次修改无关，需在 VPS Linux 复验。

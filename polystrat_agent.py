@@ -780,24 +780,23 @@ def main():
         onchain_weight /= adaptive_weight_sum
         ml_weight /= adaptive_weight_sum
 
-    # 多平台/套利信号权重（从各信号等比抽取，保持总和1.0）
-    ARBITRAGE_WEIGHT = 0.05
+    # 微观结构信号权重（从4信号等比抽取，保持总和1.0）
+    # 🔧 P2-1: 套利权重已移除（不表达概率，不应参与概率融合）
     MICROSTRUCTURE_WEIGHT = MICROSTRUCTURE_CONFIG["weight"] if MICROSTRUCTURE_CONFIG["enabled"] else 0
 
-    # 调整权重，确保总和=1.0（含微观结构和套利）
-    total_extra_weight = ARBITRAGE_WEIGHT + MICROSTRUCTURE_WEIGHT
-    if total_extra_weight > 0:
-        llm_weight *= 1 - total_extra_weight
-        sentiment_weight *= 1 - total_extra_weight
-        onchain_weight *= 1 - total_extra_weight
-        ml_weight *= 1 - total_extra_weight
+    # 调整权重，为微观结构腾出空间，保持4信号+微观=1.0
+    if MICROSTRUCTURE_WEIGHT > 0:
+        llm_weight *= 1 - MICROSTRUCTURE_WEIGHT
+        sentiment_weight *= 1 - MICROSTRUCTURE_WEIGHT
+        onchain_weight *= 1 - MICROSTRUCTURE_WEIGHT
+        ml_weight *= 1 - MICROSTRUCTURE_WEIGHT
 
     # 输出权重配置（包含动态优化信息）
     print(f"⚖️ 自适应权重配置:")
     print(
         f"   LLM: {llm_weight:.3f} | 情感: {sentiment_weight:.3f} | 链上: {onchain_weight:.3f} | ML: {ml_weight:.3f}"
     )
-    print(f"   优势阈值: {edge_threshold:.2%} | 套利信号: {ARBITRAGE_WEIGHT:.0%} | 微观结构: {MICROSTRUCTURE_WEIGHT:.0%}")
+    print(f"   优势阈值: {edge_threshold:.2%} | 微观结构: {MICROSTRUCTURE_WEIGHT:.0%}")
     print(
         f"   情感斜率: {adaptive_weights.get('sentiment_mapping_slope', 0.35):.2f} | 链上乘数: {adaptive_weights.get('onchain_multiplier', 1.0):.2f}"
     )
@@ -1147,14 +1146,10 @@ def main():
             microstructure_signal = {"recommendation": "hold", "confidence": 0.3}
             microstructure_signal_prob = 0.5
 
-        # 信号6: 多平台/套利信号（方向感知：套利信号不偏向 Yes 或 No）
-        # 套利本身是价格差异，不改变事件概率判断，仅作为置信度加成
-        if has_arbitrage and arbitrage_opportunities:
-            # 套利机会的存在增强了对当前市场定价的置信度
-            # 但不改变方向判断 → 回归 0.5（中性），加成体现在权重而非偏移
-            arbitrage_signal = 0.5
-        else:
-            arbitrage_signal = 0.5
+        # 信号6: 多平台/套利信号 — 🔧 P2-1: 不参与概率融合
+        # 套利是跨平台价格差异，不表达事件概率。原代码用恒定 0.5 参与加权，
+        # 会将 final_prob 固定拉向 0.5，稀释真实信号。
+        # 套利机会仍通过 has_arbitrage / arbitrage_opportunities 独立用于展示与记录。
 
         # === 信号7: Yes Bias 逆向信号 ===
         yes_bias_result = calculate_yes_bias_signal(market)
@@ -1176,11 +1171,11 @@ def main():
         else:
             time_decay_prob = 0.5  # 中性
 
-        # 🔧 v4.2: 统一加权融合 — 所有8个信号纳入权重体系
-        # 权重: LLM=30% 情感=10% 链上=10% ML=25% 微观=10% 套利=5% YesBias=8% 时间衰减=7% (≠100%, 套利5%固定)
+        # 🔧 v4.2+P2-1: 统一加权融合 — 7个概率信号纳入权重体系
+        # 套利不表达事件概率，已从融合移除（独立处理）
         total_weight = (
             llm_weight + sentiment_weight + onchain_weight + ml_weight
-            + MICROSTRUCTURE_CONFIG["weight"] + ARBITRAGE_WEIGHT
+            + MICROSTRUCTURE_CONFIG["weight"]
             + SIGNAL_WEIGHTS["yes_bias"] + SIGNAL_WEIGHTS["time_decay"]
         )
         final_prob = (
@@ -1189,10 +1184,9 @@ def main():
             + onchain_signal_prob * onchain_weight
             + ml_signal_prob * ml_weight
             + microstructure_signal_prob * MICROSTRUCTURE_CONFIG["weight"]
-            + arbitrage_signal * ARBITRAGE_WEIGHT
             + yes_bias_prob * SIGNAL_WEIGHTS["yes_bias"]
             + time_decay_prob * SIGNAL_WEIGHTS["time_decay"]
-        ) / total_weight  # 🔧 归一化，防止权重膨胀
+        ) / total_weight  # 归一化，防止权重膨胀
 
         # 边界检查
         final_prob = max(0.01, min(0.99, final_prob))
@@ -1250,22 +1244,11 @@ def main():
             balance=balance,
         )
 
-        # === 🆕 自主决策引擎：4阶段决策管道 ===
-        # 构建signals字典供决策引擎使用
-        microstructure_prob = microstructure_signal_prob if MICROSTRUCTURE_CONFIG["enabled"] else 0.5
-        signals_for_engine = {
-            'llm_prob': llm_prob,
-            'sentiment_score': sentiment_score,
-            'onchain_signal': onchain_signal,
-            'ml_prob': ml_prob,
-            'microstructure_prob': microstructure_prob,
-            'final_prob': final_prob,
-            'edge': edge,
-        }
-        
-        # 调用自主决策引擎
+        # === 🆕 自主决策引擎：regime 感知风控门禁 ===
+        # 🔧 P1-1 方案A: engine 不再消费 signals（信号融合由 legacy 统一负责），
+        # 仅做 regime 风控门禁（流动性/高风险环境）。传入 {} 保持接口兼容。
         auto_decision = decision_engine.make_decision(
-            market, signals_for_engine, regime_data, strategy_discoverer.strategy_pool
+            market, {}, regime_data, strategy_discoverer.strategy_pool
         )
         
         # 如果自主引擎建议跳过，优先尊重
@@ -1549,7 +1532,7 @@ def main():
     print(f"\n⚖️ 方向平衡:")
     print(f"   {balance_status['message']}")
     if not balance_status['balanced']:
-        print(f"   ⚠️ Yes方向不足，已启用boost机制")
+        print(f"   ⚠️ Yes方向占比偏低（建议关注方向多样性）")
     print()
     
     if len(decisions) == 0 and len(markets) > 0:

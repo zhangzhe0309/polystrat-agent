@@ -74,22 +74,18 @@ def calculate_category_accuracy(trade_log_path, min_samples=None):
     
     for trade in trades:
         result = trade.get("result", "pending")
-        if result == "pending":
+        # 仅统计已结算交易（settlement_tracker 写入 "win"/"lose"）
+        # 🔧 P0-1: 原代码匹配 "won"/"lost"，与生产日志格式不符 → 特性静默失效
+        if result not in ("win", "lose"):
             continue
-        
+
         category = trade.get("category", "Other")
-        direction = trade.get("direction", "")
-        final_prob = trade.get("final_prob", 0.5)
-        
-        # 判断预测是否正确: 预测方向需与实际结果一致
-        predicted_yes = final_prob > 0.5
-        if result == "won":
-            is_correct = predicted_yes  # 赢了说明预测Yes方向对了
-        elif result == "lost":
-            is_correct = not predicted_yes  # 输了说明预测No方向对了
-        else:
-            continue
-        
+
+        # 🔧 P0-2: 正确性由 result 直接判定。
+        # settlement_tracker.determine_trade_result 基于 direction==market_outcome 推导 result，
+        # 故 result=="win" ⟺ 方向预测命中，无需依赖 final_prob（原 final_prob>0.5 会系统性误判 No 获胜）
+        is_correct = result == "win"
+
         # 带衰减：近期交易权重更高
         # （简化版：不做时间衰减，只看总准确率）
         category_stats[category]["correct"] += 1 if is_correct else 0
@@ -208,26 +204,26 @@ if __name__ == "__main__":
     # 模拟交易数据
     import tempfile
     mock_trades = [
-        {"category": "Sports", "direction": "Yes", "final_prob": 0.7, "result": "won"},
-        {"category": "Sports", "direction": "Yes", "final_prob": 0.8, "result": "won"},
-        {"category": "Sports", "direction": "No", "final_prob": 0.3, "result": "lost"},
-        {"category": "Sports", "direction": "Yes", "final_prob": 0.75, "result": "won"},
-        {"category": "Sports", "direction": "No", "final_prob": 0.4, "result": "won"},
-        {"category": "Sports", "direction": "Yes", "final_prob": 0.65, "result": "lost"},
-        {"category": "Sports", "direction": "Yes", "final_prob": 0.9, "result": "won"},
-        {"category": "Sports", "direction": "No", "final_prob": 0.35, "result": "won"},
-        {"category": "Sports", "direction": "Yes", "final_prob": 0.6, "result": "won"},
-        {"category": "Sports", "direction": "Yes", "final_prob": 0.7, "result": "won"},
-        {"category": "Crypto", "direction": "Yes", "final_prob": 0.6, "result": "lost"},
-        {"category": "Crypto", "direction": "Yes", "final_prob": 0.65, "result": "lost"},
-        {"category": "Crypto", "direction": "No", "final_prob": 0.4, "result": "lost"},
-        {"category": "Crypto", "direction": "Yes", "final_prob": 0.7, "result": "lost"},
-        {"category": "Crypto", "direction": "No", "final_prob": 0.3, "result": "won"},
-        {"category": "Crypto", "direction": "Yes", "final_prob": 0.55, "result": "lost"},
-        {"category": "Crypto", "direction": "Yes", "final_prob": 0.6, "result": "lost"},
-        {"category": "Crypto", "direction": "No", "final_prob": 0.45, "result": "lost"},
-        {"category": "Crypto", "direction": "Yes", "final_prob": 0.5, "result": "lost"},
-        {"category": "Crypto", "direction": "No", "final_prob": 0.35, "result": "lost"},
+        {"category": "Sports", "direction": "Yes", "final_prob": 0.7, "result": "win"},
+        {"category": "Sports", "direction": "Yes", "final_prob": 0.8, "result": "win"},
+        {"category": "Sports", "direction": "No", "final_prob": 0.3, "result": "lose"},
+        {"category": "Sports", "direction": "Yes", "final_prob": 0.75, "result": "win"},
+        {"category": "Sports", "direction": "No", "final_prob": 0.4, "result": "win"},
+        {"category": "Sports", "direction": "Yes", "final_prob": 0.65, "result": "lose"},
+        {"category": "Sports", "direction": "Yes", "final_prob": 0.9, "result": "win"},
+        {"category": "Sports", "direction": "No", "final_prob": 0.35, "result": "win"},
+        {"category": "Sports", "direction": "Yes", "final_prob": 0.6, "result": "win"},
+        {"category": "Sports", "direction": "Yes", "final_prob": 0.7, "result": "win"},
+        {"category": "Crypto", "direction": "Yes", "final_prob": 0.6, "result": "lose"},
+        {"category": "Crypto", "direction": "Yes", "final_prob": 0.65, "result": "lose"},
+        {"category": "Crypto", "direction": "No", "final_prob": 0.4, "result": "lose"},
+        {"category": "Crypto", "direction": "Yes", "final_prob": 0.7, "result": "lose"},
+        {"category": "Crypto", "direction": "No", "final_prob": 0.3, "result": "win"},
+        {"category": "Crypto", "direction": "Yes", "final_prob": 0.55, "result": "lose"},
+        {"category": "Crypto", "direction": "Yes", "final_prob": 0.6, "result": "lose"},
+        {"category": "Crypto", "direction": "No", "final_prob": 0.45, "result": "lose"},
+        {"category": "Crypto", "direction": "Yes", "final_prob": 0.5, "result": "lose"},
+        {"category": "Crypto", "direction": "No", "final_prob": 0.35, "result": "lose"},
     ]
     
     with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
