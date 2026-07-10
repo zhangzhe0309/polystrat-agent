@@ -106,7 +106,7 @@ SWEET_SPOT_CONFIG = {
     "min_disagreement": 5,  # 最低投票分歧 5%（Debate模式Bull/Bear分歧通常10-15%）
     "max_disagreement": 40, # 最高投票分歧 40%（避免噪声）
     "min_confidence": 0.50, # 🔧 v4.2: 0.60→0.50，匹配should_trade阈值
-    "preferred_categories": ["Politics", "Sports", "Crypto", "Economics"],
+    "preferred_categories": ["Politics", "Sports", "Crypto", "Economics", "Technology"],
     "low_price_edge_min": 0.08,  # 低价市场(<0.10)的最小edge要求
 }
 
