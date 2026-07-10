@@ -855,6 +855,7 @@ def main():
     filter_stats = defaultdict(int)
     price_filtered = []      # 被价格区间过滤的 yes_price 样本
     liquidity_filtered = []  # 被流动性过滤的样本
+    category_filtered = []   # 被类别过滤的类别名（诊断分布）
 
     for market in markets:
         # 全局超时检查：超过 900 秒硬截断（15分钟）
@@ -895,6 +896,7 @@ def main():
             # 优先选择擅长的事件类型
             if category not in SWEET_SPOT_CONFIG["preferred_categories"]:
                 filter_stats['category'] += 1
+                category_filtered.append(category)
                 continue
             # 🆕 低价市场特殊处理：要求更高的edge
             if yes_price < 0.10:
@@ -1597,6 +1599,10 @@ def main():
     if liquidity_filtered:
         _liq_thresh = SWEET_SPOT_CONFIG['min_liquidity'] if SWEET_SPOT_MODE else MIN_LIQUIDITY
         print(f"   💡 流动性过滤样本: 最高 ${max(liquidity_filtered):,.0f} (阈值 ${_liq_thresh:,.0f})")
+    if category_filtered:
+        from collections import Counter
+        _cat_dist = dict(Counter(category_filtered))
+        print(f"   💡 类别过滤分布: {_cat_dist} (白名单 {SWEET_SPOT_CONFIG['preferred_categories']})")
 
 
 if __name__ == "__main__":
