@@ -101,11 +101,11 @@ MIN_LIQUIDITY = 5000  # 最小流动性 $5000
 # 甜蜜点市场配置（聚焦高胜率区间）
 SWEET_SPOT_CONFIG = {
     "min_price": 0.05,      # 最低 5¢（扩大到低价市场，捕捉更多机会）
-    "max_price": 0.40,      # 最高 40¢（扩大范围）
+    "max_price": 0.90,      # 🔧 v4.2: 0.40→0.90，允许Yes Bias逆向入场（Yes>70%）
     "min_liquidity": 15000, # 最低流动性 $15k（稍微放宽）
     "min_disagreement": 5,  # 最低投票分歧 5%（Debate模式Bull/Bear分歧通常10-15%）
     "max_disagreement": 40, # 最高投票分歧 40%（避免噪声）
-    "min_confidence": 0.6,  # 最低投票置信度 60%
+    "min_confidence": 0.50, # 🔧 v4.2: 0.60→0.50，匹配should_trade阈值
     "preferred_categories": ["Politics", "Sports", "Crypto", "Economics"],
     "low_price_edge_min": 0.08,  # 低价市场(<0.10)的最小edge要求
 }
@@ -121,14 +121,17 @@ MICROSTRUCTURE_CONFIG = {
     "prefer_tight_spread": True,  # 优先选择价差小的市场
 }
 
-# 权重配置（优化后：降低LLM共线性风险，提高ML/链上权重）
-# 信号源: LLM, 情感, 链上, ML, 微观结构
+# 🔧 v4.2 权重配置（高级交易员评审优化）
+# 核心改动: LLM↑(最高质量信号), 链上↓(只是API查询), 情感↓(与LLM相关), 
+#           Yes Bias/时间衰减纳入权重体系(不再无约束偏移)
 SIGNAL_WEIGHTS = {
-    "llm": 0.20,  # LLM 分析权重（降低，为微观结构腾出空间）
-    "sentiment": 0.15,  # 新闻情感权重
-    "onchain": 0.25,  # 链上信号权重
-    "ml": 0.25,  # ML 信号权重
-    "microstructure": 0.15,  # 市场微观结构信号权重
+    "llm": 0.30,           # 🔧 20%→30%: Debate是最强信号，应得最高权重
+    "sentiment": 0.10,     # 🔧 15%→10%: 与LLM高度相关(都用新闻文本)，降权去共线性
+    "onchain": 0.10,       # 🔧 25%→10%: 只是Gamma API交易量查询，不是真正链上数据
+    "ml": 0.25,            # → 25%: 多模型集成，权重合理
+    "microstructure": 0.10,# 🔧 15%→10%: 与MICROSTRUCTURE_CONFIG.weight=0.10统一
+    "yes_bias": 0.08,      # 🆕 纳入权重体系，不再无约束偏移
+    "time_decay": 0.07,    # 🆕 纳入权重体系，不再无约束偏移
 }
 
 # 验证权重归一化
@@ -1153,7 +1156,33 @@ def main():
         else:
             arbitrage_signal = 0.5
 
-        # 使用自适应权重进行加权平均（含微观结构和套利信号）
+        # === 信号7: Yes Bias 逆向信号 ===
+        yes_bias_result = calculate_yes_bias_signal(market)
+        # 🔧 v4.2: 从加法偏移改为概率信号，纳入权重体系
+        # Yes Bias返回signal范围[-0.3, +0.3]，转换为概率[0.2, 0.8]
+        if yes_bias_result["strength"] != "none":
+            yes_bias_prob = 0.5 + yes_bias_result["signal"]  # 转换: signal∈[-0.3,0.3] → prob∈[0.2,0.8]
+            yes_bias_prob = max(0.01, min(0.99, yes_bias_prob))
+        else:
+            yes_bias_prob = 0.5  # 中性
+            yes_bias_result = {"signal": 0, "strength": "none", "direction": "neutral", "reason": "无Yes Bias信号"}
+
+        # === 信号8: 时间衰减信号 ===
+        time_decay_result = calculate_time_decay_signal(market)
+        # 🔧 v4.2: 从加法偏移改为概率信号，纳入权重体系
+        if time_decay_result["signal"] != 0:
+            time_decay_prob = 0.5 + time_decay_result["signal"]  # 转换: signal∈[-0.2,0.2] → prob∈[0.3,0.7]
+            time_decay_prob = max(0.01, min(0.99, time_decay_prob))
+        else:
+            time_decay_prob = 0.5  # 中性
+
+        # 🔧 v4.2: 统一加权融合 — 所有8个信号纳入权重体系
+        # 权重: LLM=30% 情感=10% 链上=10% ML=25% 微观=10% 套利=5% YesBias=8% 时间衰减=7% (≠100%, 套利5%固定)
+        total_weight = (
+            llm_weight + sentiment_weight + onchain_weight + ml_weight
+            + MICROSTRUCTURE_CONFIG["weight"] + ARBITRAGE_WEIGHT
+            + SIGNAL_WEIGHTS["yes_bias"] + SIGNAL_WEIGHTS["time_decay"]
+        )
         final_prob = (
             llm_signal_prob * llm_weight
             + sentiment_signal_prob * sentiment_weight
@@ -1161,26 +1190,17 @@ def main():
             + ml_signal_prob * ml_weight
             + microstructure_signal_prob * MICROSTRUCTURE_CONFIG["weight"]
             + arbitrage_signal * ARBITRAGE_WEIGHT
-        )
+            + yes_bias_prob * SIGNAL_WEIGHTS["yes_bias"]
+            + time_decay_prob * SIGNAL_WEIGHTS["time_decay"]
+        ) / total_weight  # 🔧 归一化，防止权重膨胀
 
         # 边界检查
-        final_prob = max(0.01, min(0.99, final_prob))  # 防止极端值
+        final_prob = max(0.01, min(0.99, final_prob))
 
-        # === 信号7: Yes Bias 逆向信号 ===
-        yes_bias_result = calculate_yes_bias_signal(market)
         if yes_bias_result["strength"] != "none":
-            pre_bias = final_prob
-            final_prob += yes_bias_result["signal"]
-            final_prob = max(0.01, min(0.99, final_prob))
-            print(f"   🔄 Yes Bias: {yes_bias_result['direction'].upper()} | {yes_bias_result['reason']} | {pre_bias:.2f}→{final_prob:.2f}")
-
-        # === 信号8: 时间衰减信号 ===
-        time_decay_result = calculate_time_decay_signal(market)
+            print(f"   🔄 Yes Bias: {yes_bias_result['direction'].upper()} | {yes_bias_result['reason']} | prob={yes_bias_prob:.2f} (权重{SIGNAL_WEIGHTS['yes_bias']:.0%})")
         if time_decay_result["signal"] != 0:
-            pre_decay = final_prob
-            final_prob += time_decay_result["signal"]
-            final_prob = max(0.01, min(0.99, final_prob))
-            print(f"   ⏰ 时间衰减: {time_decay_result['reason']} | {pre_decay:.2f}→{final_prob:.2f}")
+            print(f"   ⏰ 时间衰减: {time_decay_result['reason']} | prob={time_decay_prob:.2f} (权重{SIGNAL_WEIGHTS['time_decay']:.0%})")
 
         # 信号质量检查：超过 2 个信号回退时跳过该市场（防噪声交易）
         if signal_fallbacks >= 2:
@@ -1318,12 +1338,14 @@ def main():
             vol_scale = guard_result.get("position_scale", 1.0)
 
             # 计算仓位大小（Fractional Kelly + 投票置信度 + 流动性适配 + 波动率缩放）
-            # Kelly 公式: f* = edge / (1 - market_price) for Yes bets
+            # Kelly 公式: f* = edge / odds
+            # 🔧 v4.2: 修复No方向计算 — No赔率 = 1 - yes_price
             kelly_fraction = 0.25  # 25% Kelly 保守策略
             if direction == "Yes":
                 kelly_pct = edge / (1 - yes_price) if (1 - yes_price) > 0.01 else 0
             else:
-                kelly_pct = abs(edge) / yes_price if yes_price > 0.01 else 0
+                no_price = 1 - yes_price  # No的真实赔率
+                kelly_pct = abs(edge) / no_price if no_price > 0.01 else 0
             kelly_pct = max(0, min(0.5, kelly_pct))  # 限制单笔不超过50%
             kelly_position = balance * kelly_pct * kelly_fraction * voting_confidence
 

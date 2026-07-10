@@ -12,7 +12,6 @@ import os
 from datetime import datetime, timezone
 from safe_file_ops import atomic_read_json
 from polystrat_logger import log
-from constants import DEFAULT_BALANCE
 
 # 配置
 STOP_LOSS_THRESHOLD = 0.10  # 最大累计回撤10%（正数，与 drawdown_pct 比较）
@@ -21,7 +20,10 @@ MAX_TOTAL_POSITION = 0.25  # 总仓位最大25%（与止损敞口阈值一致）
 MAX_SAME_CATEGORY = 0.20  # 同一类别最大20%
 MAX_SAME_MARKET = 0.10  # 同一市场最大10%
 
-from config_center import TRADE_LOG
+# 交易记录文件
+TRADE_LOG = (
+    "/root/.hermes/profiles/life/home/.hermes/polymarket_bot/logs/polystrat_trades.json"
+)
 
 
 def set_trade_log_path(path):
@@ -115,7 +117,7 @@ def check_stop_loss(balance=None, trade_history=None):
         trade_history = load_trade_history()
 
     if balance is None:
-        balance = float(os.environ.get("POLYSTRAT_BALANCE", str(DEFAULT_BALANCE)))
+        balance = float(os.environ.get("POLYSTRAT_BALANCE", "1000.0"))
 
     # 统计已结算交易的盈亏
     net_pnl = 0.0
@@ -207,8 +209,8 @@ def calculate_risk_score(market, confidence, news_sentiment=0):
                 risk_score += 0.3  # 临近到期风险更高
             elif days_left < 30:
                 risk_score += 0.1
-        except Exception as e:
-            print(f"⚠️ 风险评分到期日计算失败: {e}")
+        except Exception:
+            pass
 
     # 4. 新闻情感风险
     if abs(news_sentiment) > 0.5:
@@ -247,7 +249,8 @@ def should_trade(market, confidence, news_sentiment, balance):
         return False, f"风险过高 ({risk_score:.2f})"
 
     # 4. 置信度阈值
-    if confidence < 0.3:
+    # 🔧 v4.2: 0.3→0.5，至少比抛硬币好才下单（专业交易员标准）
+    if confidence < 0.5:
         return False, f"置信度过低 ({confidence:.2f})"
 
     return True, f"风险可接受 ({risk_score:.2f}), 仓位: {position_size:.2f}"
