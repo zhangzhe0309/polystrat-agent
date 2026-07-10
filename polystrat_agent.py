@@ -1332,6 +1332,7 @@ def main():
                 "intended_price": order_price,
                 "confidence": voting_confidence,
                 "edge": edge,
+                "news_sentiment": sentiment_score,  # 🔧 P0-3: 守门 risk_management 检查需要
             }
             guard_result = guard_rail_check(market, guard_context)
             
@@ -1348,15 +1349,50 @@ def main():
             # 波动率仓位缩放
             vol_scale = guard_result.get("position_scale", 1.0)
 
-            # 计算仓位大小（Fractional Kelly + 投票置信度 + 流动性适配 + 波动率缩放）
-            # Kelly 公式: f* = edge / odds
-            # 🔧 v4.2: 修复No方向计算 — No赔率 = 1 - yes_price
+            # === 🔧 P0 修复: CLOB 价格校验前置 + 用真实价重算 net_edge ===
+            # 原代码用 Gamma 价算 edge/Kelly，CLOB 校验在仓位后不回退 → 纸上盈利实盘亏
+            price_check = validate_price_before_trade(
+                market, direction, order_price, token_id
+            )
+            if not price_check["valid"]:
+                log.warning(f"❌ 价格校验失败: {price_check['reason']}")
+                decision["order_result"] = {
+                    "status": "PRICE_CHECK_FAILED",
+                    "reason": price_check["reason"],
+                }
+                decisions.append(decision)
+                continue
+
+            # 用 CLOB 真实价替代 Gamma 价（下单也用真实价）
+            real_price = price_check["real_price"] if price_check.get("real_price", 0) > 0 else order_price
+            if abs(real_price - order_price) > 0.02:
+                print(f"   ⚠️ 价格校验: Gamma={order_price:.2f}→CLOB={real_price:.2f} (slippage={price_check.get('price_slippage', 0):+.2f}¢)")
+            order_price = real_price
+
+            # 计算 net_edge（扣除滑点后的真实 edge）
+            # Yes: final_prob - real_price；No: (1-final_prob) - real_price
+            target_prob = final_prob if direction == "Yes" else (1 - final_prob)
+            net_edge = target_prob - real_price
+
+            # net_edge 反转(<=0)或不足则跳过（防止"Gamma edge 达标、CLOB 真实 edge 反转/不足"的亏损单）
+            # 注：net_edge 对 Yes/No 都是"目标概率-real_price"，<=0 即优势反转
+            if net_edge <= 0 or net_edge < edge_threshold:
+                log.warning(
+                    f"📊 真实edge {net_edge:+.1%} (反转/不足, 阈值 {edge_threshold:.1%})，跳过"
+                )
+                decision["order_result"] = {
+                    "status": "NET_EDGE_INSUFFICIENT",
+                    "reason": f"真实edge {net_edge:+.1%} (反转/不足 < {edge_threshold:.1%})",
+                }
+                decisions.append(decision)
+                continue
+
+            # 计算仓位（Fractional Kelly，用 net_edge + real_price）
             kelly_fraction = 0.25  # 25% Kelly 保守策略
             if direction == "Yes":
-                kelly_pct = edge / (1 - yes_price) if (1 - yes_price) > 0.01 else 0
+                kelly_pct = net_edge / (1 - real_price) if (1 - real_price) > 0.01 else 0
             else:
-                no_price = 1 - yes_price  # No的真实赔率
-                kelly_pct = abs(edge) / no_price if no_price > 0.01 else 0
+                kelly_pct = abs(net_edge) / real_price if real_price > 0.01 else 0
             kelly_pct = max(0, min(0.5, kelly_pct))  # 限制单笔不超过50%
             kelly_position = balance * kelly_pct * kelly_fraction * voting_confidence
 
@@ -1369,7 +1405,6 @@ def main():
                 liquidity_factor = max(0.3, liquidity / 10000)
 
             # 最终仓位 = min(Kelly × 流动性调整 × 波动率缩放, 硬上限)
-            # GuardRail 已包含 trade_limits 检查，这里只做仓位计算
             position_size = min(
                 kelly_position * liquidity_factor * vol_scale,
                 balance * 0.05,
@@ -1389,33 +1424,8 @@ def main():
                 continue
             position_size = round(position_size, 2)
 
-            # (trade_limits 已在 GuardRail 中检查，此处不再重复)
-
-            # Kelly 计算出的是美元金额，CLOB 需要代币数量（shares）
-            token_count = (
-                position_size / order_price if order_price > 0 else position_size
-            )
-
-            # === CLOB Bid/Ask 价格校验 ===
-            # 用CLOB真实ask价替代Gamma价格，防止纸上盈利实盘亏
-            price_check = validate_price_before_trade(
-                market, direction, order_price, token_id
-            )
-            if not price_check["valid"]:
-                log.warning(f"❌ 价格校验失败: {price_check['reason']}")
-                decision["order_result"] = {
-                    "status": "PRICE_CHECK_FAILED",
-                    "reason": price_check["reason"],
-                }
-                decisions.append(decision)
-                continue
-            
-            # 用真实价格重新计算token数量
-            if price_check["real_price"] > 0 and price_check["real_price"] != order_price:
-                real_order_price = price_check["real_price"]
-                token_count = position_size / real_order_price if real_order_price > 0 else token_count
-                if abs(real_order_price - order_price) > 0.02:
-                    print(f"   ⚠️ 价格校验: Gamma={order_price:.2f}→CLOB={real_order_price:.2f} (slippage={price_check['price_slippage']:+.2f}¢)")
+            # Kelly 算出美元金额，CLOB 需要代币数量（shares），用真实价
+            token_count = position_size / order_price if order_price > 0 else position_size
 
             result = place_order(token_id, "BUY", round(token_count, 2), order_price)
             decision["order_result"] = result

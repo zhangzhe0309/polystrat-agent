@@ -503,19 +503,16 @@ HIGH / MEDIUM / LOW（基于证据充分程度）
         bull_prob = bull_result.get('implied_probability', current_price)
         bear_prob = bear_result.get('implied_probability', 1 - current_price)
         
-        prompt = f"""你是一个资深的预测市场裁判官。你需要综合评估多空双方的论点，做出最终的概率判断。
+        prompt = f"""你是一个资深的预测市场裁判官。你需要综合评估多空双方的论点，基于事实独立做出最终的概率判断。
 
 市场问题: {market_title}
 市场分类: {category}
-当前市场价: Yes = {current_price * 100:.0f}¢
 
 【看多方论点】
 {bull_summary}
-看多方隐含概率: Yes = {bull_prob * 100:.0f}%
 
 【看空方论点】
 {bear_summary}
-看空方隐含概率: Yes = {bear_prob * 100:.0f}%
 
 请综合评估后输出：
 
@@ -533,7 +530,7 @@ HIGH / MEDIUM / LOW
 
 要求：
 - 客观公正，不要被任何一方立场左右
-- 结合当前市场价格，判断哪一方更有优势
+- 🔧 基于事实和论点独立判断事件发生的真实概率，不要参考任何市场价格信息（防止锚定偏差）
 - 如果双方都有合理之处，给出一个折中的概率
 - 只输出上述格式内容"""
 

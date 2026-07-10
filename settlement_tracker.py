@@ -285,6 +285,14 @@ def update_settled_trades():
                 stats["updated"] += 1
                 stats["total_pnl"] += pnl
 
+                # 🔧 P0-2: 接入断路器，让真实 PnL 驱动 consecutive_losses/daily_pnl/total_pnl
+                # （原代码从未调用 record_trade_result，断路器三条触发条件恒为 0，形同虚设）
+                try:
+                    from circuit_breaker import record_trade_result
+                    record_trade_result(pnl)
+                except Exception as cb_err:
+                    log.warning(f"断路器记录失败: {cb_err}")
+
                 if result == "win":
                     stats["wins"] += 1
                 else:

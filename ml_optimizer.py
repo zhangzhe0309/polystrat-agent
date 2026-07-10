@@ -149,14 +149,14 @@ def extract_features(trades):
         microstructure_confidence = microstructure_signal.get("confidence", 0.3)
         microstructure_buy = 1 if microstructure_signal.get("recommendation") in ["buy", "strong_buy"] else 0
 
-        # 只使用交易时可获取的市场信息作为特征（不包含决策输出）
+        # 🔧 移除决策输出特征(edge/direction)防止循环论证:
+        # edge = final_prob - market_price, direction = sign(edge)
+        # 用它们预测"按direction下单是否赢"构成循环 → 回测虚高实盘崩
         feature = [
-            # 核心信号特征（5个）
+            # 核心信号特征（3个，仅外生信号）
             trade.get("llm_prob", 0.5),  # 1. LLM 预测概率
             trade.get("sentiment_score", 0),  # 2. 情感分数
-            abs(trade.get("edge", 0)),  # 3. 优势绝对值
-            trade.get("market_price", 0.5),  # 4. 市场价格
-            1 if trade.get("direction") == "Yes" else 0,  # 5. 方向
+            trade.get("market_price", 0.5),  # 3. 市场价格（外生输入）
 
             # 链上信号特征（3个）
             onchain_confidence,  # 6. 链上信号置信度
@@ -220,8 +220,10 @@ def train_ensemble_models(features, labels):
 
     # 划分训练集和验证集（用于评估各模型表现）
     if len(features) >= 6:
+        # 🔧 shuffle=False: 时间序列不可随机打乱（否则用未来预测过去，验证集虚高）
+        # 移除 stratify（与 shuffle=False 不兼容），小样本下接受类别不平衡
         feat_train, feat_val, label_train, label_val = train_test_split(
-            features, labels, test_size=0.25, random_state=42, stratify=labels
+            features, labels, test_size=0.25, random_state=42, shuffle=False
         )
     else:
         feat_train, feat_val, label_train, label_val = (
@@ -421,9 +423,9 @@ def optimize_with_ml():
                 correct += 1
             total += 1
 
-    # 特征重要性（使用 RandomForest）- 15个特征
+    # 特征重要性（使用 RandomForest）- 13个特征（🔧 移除优势/方向防循环论证）
     feature_names = [
-        "LLM概率", "情感分数", "优势", "市场价格", "方向",
+        "LLM概率", "情感分数", "市场价格",
         "链上置信度", "链上买入", "链上卖出",
         "到期时间", "市场分类",
         "新闻数量",

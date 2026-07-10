@@ -282,10 +282,12 @@ def guard_rail_check(market, context, config=None):
     # 5. 风险管理
     try:
         from risk_management import should_trade
-        direction = context.get("direction", "Yes")
         confidence = context.get("confidence", 0.5)
-        edge = context.get("edge", 0)
-        should, risk_reason = should_trade(edge, confidence, direction)
+        news_sentiment = context.get("news_sentiment", 0)
+        balance = context.get("balance", 1000)
+        # 🔧 P0-3: 修正传参 — should_trade 签名为 (market, confidence, news_sentiment, balance)
+        # 原代码传 (edge, confidence, direction) → TypeError 被吞，检查项静默失效
+        should, risk_reason = should_trade(market, confidence, news_sentiment, balance)
         checks.append({
             "name": "risk_management",
             "pass": should,
