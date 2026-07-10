@@ -103,17 +103,17 @@ PROVIDERS = {
     },
 }
 
-# === 辩论角色 → 平台分配（确保不同角色用不同平台） ===
-# 策略（v5: GitHub做主力，最稳定1-2s响应，无429问题）：
-#   - Bull: GitHub GPT-4o-mini(1.7s) → NVIDIA → Groq → AGNES → OpenRouter → GLM
-#   - Bear: GitHub GPT-4o-mini(1.7s) → NVIDIA → Groq → AGNES → OpenRouter → GLM
-#   - Judge: GitHub GPT-4o-mini(1.7s) → NVIDIA → Groq → AGNES → OpenRouter → GLM
-# Bull/Bear/GitHub串行调用不会撞限流(GitHub 60RPM)，不同角色同平台OK
-# AGNES做Judge有时需30-60s(内置thinking)，放后面
+# === 辩论角色 → 平台分配 ===
+# 🔧 恢复异构 provider 链：三角色主力来自不同模型族（GPT/GLM/Llama）
+# 原配置三角色主力同为 GitHub(gpt-4o-mini) → 伪多样性，盲点相关
+#   github=GPT族 | nvidia=GLM族 | groq=Llama族
+#   - Bull: GitHub(GPT) → Groq → NVIDIA → AGNES → OpenRouter → GLM
+#   - Bear: NVIDIA(GLM) → GitHub → Groq → AGNES → OpenRouter → GLM
+#   - Judge: Groq(Llama) → GitHub → NVIDIA → AGNES → OpenRouter → GLM
 ROLE_PROVIDERS = {
-    "bull": ["github", "nvidia", "groq", "agnes", "openrouter", "glm"],
-    "bear": ["github", "nvidia", "groq", "agnes", "openrouter", "glm"],
-    "judge": ["github", "nvidia", "groq", "agnes", "openrouter", "glm"],
+    "bull": ["github", "groq", "nvidia", "agnes", "openrouter", "glm"],
+    "bear": ["nvidia", "github", "groq", "agnes", "openrouter", "glm"],
+    "judge": ["groq", "github", "nvidia", "agnes", "openrouter", "glm"],
 }
 
 # === 429 重试配置 ===
@@ -624,15 +624,15 @@ HIGH / MEDIUM / LOW
 
 
 def _parse_confidence(text):
-    """从文本中解析信心水平"""
-    # 找信心水平附近的文本
-    parts = text.split('信心水平')
-    if len(parts) > 1:
-        tail = parts[-1][:30]
-        if 'HIGH' in tail:
-            return 'HIGH'
-        elif 'LOW' in tail:
-            return 'LOW'
+    """从文本中解析信心水平（兼容中英文/大小写）"""
+    # 匹配 信心水平/信心度/Confidence 标签后的等级（大小写不敏感）
+    m = re.search(r'(?:信心水平|信心度|Confidence)[:：\s]*\s*(HIGH|MEDIUM|LOW)', text, re.IGNORECASE)
+    if m:
+        return m.group(1).upper()
+    # 兜底：全文最后出现的等级（LLM 可能用小写或不同格式）
+    levels = re.findall(r'\b(HIGH|MEDIUM|LOW)\b', text, re.IGNORECASE)
+    if levels:
+        return levels[-1].upper()
     return 'MEDIUM'
 
 

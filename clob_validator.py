@@ -200,8 +200,9 @@ def validate_price_before_trade(market, intended_direction, intended_price, toke
             "reason": f"CLOB查询失败({orderbook['error']})，保守放行",
         }
     
-    # 买入时用ask价，卖出时用bid价
-    if intended_direction == "Yes":
+    # 🔧 买入 Yes/No token 的成本都是该 token 的 best_ask
+    # direction=No 时下单是 BUY no_token，成本 = no_token.best_ask（原误用 best_bid）
+    if intended_direction in ("Yes", "No"):
         real_price = orderbook["best_ask"] if orderbook["best_ask"] > 0 else intended_price
     else:
         real_price = orderbook["best_bid"] if orderbook["best_bid"] > 0 else intended_price

@@ -836,7 +836,55 @@ def main():
     # 初始化策略发现器和决策引擎
     strategy_discoverer = StrategyDiscoverer(TRADE_LOG)
     decision_engine = AutonomousDecisionEngine()
-    
+
+    # === 🔧 P0: 止盈管理器接入（阶梯TP/追踪止损/时间止损） ===
+    # 原主循环下单后从不注册仓位 → 无止盈保护，浮盈全部回吐（最大盈利泄漏）
+    from take_profit_manager import TakeProfitManager
+    tp_manager = TakeProfitManager()
+
+    # 止盈监控：检查已有持仓的 TP/止损/超时，对触发信号执行 SELL
+    try:
+        from clob_validator import get_clob_orderbook
+        open_positions = {pid: p for pid, p in tp_manager.positions.items() if p.remaining_pct > 0.01}
+        if open_positions:
+            print(f"💰 止盈监控: 检查 {len(open_positions)} 个持仓")
+            current_prices = {}
+            for pid, pos in open_positions.items():
+                if not pos.token_id:
+                    continue
+                try:
+                    book = get_clob_orderbook(pos.token_id)
+                    if book.get("success") and book.get("mid_price", 0) > 0:
+                        current_prices[pid] = book["mid_price"]
+                except Exception:
+                    continue
+
+            if current_prices:
+                exits = tp_manager.check_take_profits(current_prices)
+                for ex in exits:
+                    pos = tp_manager.positions.get(ex.position_id)
+                    if not pos:
+                        continue
+                    sell_shares = pos.shares * ex.exit_pct
+                    try:
+                        place_order(pos.token_id, "SELL", round(sell_shares, 2), ex.exit_price)
+                        # 记录 PnL 到断路器 + 平仓到限额
+                        try:
+                            record_trade_result(ex.pnl_usd)
+                        except Exception:
+                            pass
+                        try:
+                            from trade_limits import record_close
+                            record_close(ex.exit_size_usdc)
+                        except Exception:
+                            pass
+                        print(f"   💸 TP平仓: {pos.market_question[:40]} | {ex.stage} | 退出{ex.exit_pct:.0%} @ {ex.exit_price:.2f} | PnL ${ex.pnl_usd:+.2f}")
+                    except Exception as sell_err:
+                        log.warning(f"TP平仓下单失败: {sell_err}")
+                tp_manager._save_state()
+    except Exception as tp_mon_err:
+        log.warning(f"止盈监控失败: {tp_mon_err}")
+
     # 策略池报告
     strategy_report = strategy_discoverer.get_strategy_report()
     print(f"📋 策略池:")
@@ -1196,12 +1244,16 @@ def main():
         else:
             time_decay_prob = 0.5  # 中性
 
-        # 🔧 v4.2+P2-1: 统一加权融合 — 7个概率信号纳入权重体系
-        # 套利不表达事件概率，已从融合移除（独立处理）
+        # 🔧 权重重分配：yes_bias/time_decay 是条件信号，无信号(条件不满足)时剔除权重
+        # 而非用0.5占位稀释 final_prob（原代码系统性压低 edge）
+        yes_bias_weight = SIGNAL_WEIGHTS["yes_bias"] if yes_bias_result["strength"] != "none" else 0
+        time_decay_weight = SIGNAL_WEIGHTS["time_decay"] if time_decay_result["signal"] != 0 else 0
+
+        # 统一加权融合（套利不表达概率已移除；条件信号无信号时权重=0不参与，防稀释）
         total_weight = (
             llm_weight + sentiment_weight + onchain_weight + ml_weight
             + MICROSTRUCTURE_CONFIG["weight"]
-            + SIGNAL_WEIGHTS["yes_bias"] + SIGNAL_WEIGHTS["time_decay"]
+            + yes_bias_weight + time_decay_weight
         )
         final_prob = (
             llm_signal_prob * llm_weight
@@ -1209,8 +1261,8 @@ def main():
             + onchain_signal_prob * onchain_weight
             + ml_signal_prob * ml_weight
             + microstructure_signal_prob * MICROSTRUCTURE_CONFIG["weight"]
-            + yes_bias_prob * SIGNAL_WEIGHTS["yes_bias"]
-            + time_decay_prob * SIGNAL_WEIGHTS["time_decay"]
+            + yes_bias_prob * yes_bias_weight
+            + time_decay_prob * time_decay_weight
         ) / total_weight  # 归一化，防止权重膨胀
 
         # 边界检查
@@ -1319,6 +1371,7 @@ def main():
             and token_id
             and should_trade_flag
             and not STOP_LOSS_TRIGGERED
+            and check_breaker()  # 🔧 断路器门禁（熔断触发时拒绝新单，原仅记录未拦截）
         ):
             # === 🆕 统一守门检查 (GuardRail) ===
             # 替代分散的circuit_breaker + trade_limits + CLOB校验
@@ -1468,6 +1521,34 @@ def main():
 
             # 记录到交易限额
             record_trade(position_size)
+
+            # 🔧 P0: 注册仓位到止盈管理器（仅下单成功时注册，防幽灵仓位）
+            _order_status = result.get("status", "") if result else ""
+            if _order_status in ("SUCCESS", "DRY_RUN"):
+                try:
+                    end_dt = None
+                    _end_str = market.get("end_date", "")
+                    if _end_str:
+                        try:
+                            end_dt = (datetime.fromisoformat(_end_str.replace("Z", "+00:00"))
+                                      if "T" in _end_str
+                                      else datetime.strptime(_end_str, "%Y-%m-%d").replace(tzinfo=timezone.utc))
+                        except Exception:
+                            pass
+                    tp_manager.add_position(
+                        position_id=condition_id or title,
+                        entry_price=order_price,
+                        size_usdc=position_size,
+                        token_id=token_id,
+                        outcome=direction,
+                        market_question=title,
+                        category=category,
+                        market_closes_at=end_dt,
+                    )
+                except Exception as tp_reg_err:
+                    log.warning(f"TP注册失败: {tp_reg_err}")
+            else:
+                log.warning(f"⚠️ 下单未成功({_order_status})，跳过TP注册")
 
         decisions.append(decision)
 
