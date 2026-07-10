@@ -1044,6 +1044,7 @@ def main():
             # 分歧太大 = 噪声，不可靠
             if disagreement > SWEET_SPOT_CONFIG["max_disagreement"]:
                 filter_stats['high_disagreement'] += 1
+                disagreement_filtered.append(disagreement)
                 print(f"⏭️ 跳过 {title[:40]}... (分歧 {disagreement:.1f}% > {SWEET_SPOT_CONFIG['max_disagreement']}%)")
                 continue
 
@@ -1607,7 +1608,7 @@ def main():
         print(f"   💡 类别过滤分布: {_cat_dist} (白名单 {SWEET_SPOT_CONFIG['preferred_categories']})")
     if disagreement_filtered:
         _dvals = sorted(disagreement_filtered)
-        print(f"   💡 分歧不足样本: {[f'{d:.1f}%' for d in _dvals]} (阈值 {SWEET_SPOT_CONFIG['min_disagreement']}%)")
+        print(f"   💡 分歧过滤样本(阈值 {SWEET_SPOT_CONFIG['min_disagreement']}-{SWEET_SPOT_CONFIG['max_disagreement']}%): {[f'{d:.1f}%' for d in _dvals]}")
 
 
 if __name__ == "__main__":
