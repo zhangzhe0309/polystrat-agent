@@ -850,6 +850,12 @@ def main():
     print(format_regime_report(regime_data))
     print()
 
+    # 🔧 过滤漏斗诊断：统计每个市场被哪道关卡拦住（定位0下单根因）
+    from collections import defaultdict
+    filter_stats = defaultdict(int)
+    price_filtered = []      # 被价格区间过滤的 yes_price 样本
+    liquidity_filtered = []  # 被流动性过滤的样本
+
     for market in markets:
         # 全局超时检查：超过 900 秒硬截断（15分钟）
         elapsed = _time.time() - start_time
@@ -878,12 +884,17 @@ def main():
         if SWEET_SPOT_MODE:
             # 跳过甜蜜点区间外的市场
             if yes_price < SWEET_SPOT_CONFIG["min_price"] or yes_price > SWEET_SPOT_CONFIG["max_price"]:
+                filter_stats['price_range'] += 1
+                price_filtered.append(yes_price)
                 continue
             # 跳过低流动性市场（甜蜜点需要更高流动性）
             if liquidity < SWEET_SPOT_CONFIG["min_liquidity"]:
+                filter_stats['liquidity'] += 1
+                liquidity_filtered.append(liquidity)
                 continue
             # 优先选择擅长的事件类型
             if category not in SWEET_SPOT_CONFIG["preferred_categories"]:
+                filter_stats['category'] += 1
                 continue
             # 🆕 低价市场特殊处理：要求更高的edge
             if yes_price < 0.10:
@@ -898,14 +909,19 @@ def main():
                 yes_price > dynamic_thresholds["max_price"]
                 or yes_price < dynamic_thresholds["min_price"]
             ):
+                filter_stats['price_range'] += 1
+                price_filtered.append(yes_price)
                 continue
             # 跳过低流动性市场
             if liquidity < MIN_LIQUIDITY:
+                filter_stats['liquidity'] += 1
+                liquidity_filtered.append(liquidity)
                 continue
 
         # === 修复：跳过DEDUP_HOURS小时内已交易的市场（用 condition_id 去重） ===
         dedup_key = condition_id if condition_id else title.lower()
         if dedup_key in traded_markets_24h:
+            filter_stats['dedup'] += 1
             print(f"⏭️ 跳过已交易市场: {title[:40]}...")
             continue
 
@@ -999,6 +1015,7 @@ def main():
             title, news_text, yes_price, category
         )
         if llm_prob is None:
+            filter_stats['llm_failed'] += 1
             continue
 
         # 记录投票详情
@@ -1016,16 +1033,19 @@ def main():
 
             # 分歧太小 = 市场已定价，无优势
             if disagreement < SWEET_SPOT_CONFIG["min_disagreement"]:
+                filter_stats['low_disagreement'] += 1
                 print(f"⏭️ 跳过 {title[:40]}... (分歧 {disagreement:.1f}% < {SWEET_SPOT_CONFIG['min_disagreement']}%)")
                 continue
 
             # 分歧太大 = 噪声，不可靠
             if disagreement > SWEET_SPOT_CONFIG["max_disagreement"]:
+                filter_stats['high_disagreement'] += 1
                 print(f"⏭️ 跳过 {title[:40]}... (分歧 {disagreement:.1f}% > {SWEET_SPOT_CONFIG['max_disagreement']}%)")
                 continue
 
             # 置信度太低 = 模型不确定
             if confidence < SWEET_SPOT_CONFIG["min_confidence"]:
+                filter_stats['low_confidence'] += 1
                 print(f"⏭️ 跳过 {title[:40]}... (置信度 {confidence:.2f} < {SWEET_SPOT_CONFIG['min_confidence']})")
                 continue
 
@@ -1198,6 +1218,7 @@ def main():
 
         # 信号质量检查：超过 2 个信号回退时跳过该市场（防噪声交易）
         if signal_fallbacks >= 2:
+            filter_stats['signal_fallback'] += 1
             print(f"⏭️ 跳过 {title[:40]}... ({signal_fallbacks}/4 信号回退)")
             continue
 
@@ -1206,6 +1227,7 @@ def main():
         
         # 🆕 低价市场特殊edge要求
         if market.get('_low_price', False) and abs(edge) < SWEET_SPOT_CONFIG['low_price_edge_min']:
+            filter_stats['low_price_edge'] += 1
             print(f"⏭️ 跳过 {title[:40]}... (低价市场 edge={edge:.1%} < {SWEET_SPOT_CONFIG['low_price_edge_min']:.0%} 要求)")
             continue
         
@@ -1220,6 +1242,7 @@ def main():
 
         # 跳过无 token_id 的市场
         if not token_id:
+            filter_stats['no_token'] += 1
             continue
 
         # 7. 风险检查（使用投票置信度，而非情感置信度）
@@ -1534,9 +1557,46 @@ def main():
     if not balance_status['balanced']:
         print(f"   ⚠️ Yes方向占比偏低（建议关注方向多样性）")
     print()
-    
-    if len(decisions) == 0 and len(markets) > 0:
-        print(f"   ⚠️ 所有市场均被跳过（去重/价格/流动性过滤）")
+
+    # 🔧 过滤漏斗诊断：定位市场被哪道关卡拦住（定位0下单根因）
+    _funnel = [
+        ('price_range', '价格区间外'), ('liquidity', '流动性不足'),
+        ('category', '类别不符'), ('dedup', '去重(24h已交易)'),
+        ('llm_failed', 'LLM分析失败'), ('low_disagreement', '分歧不足'),
+        ('high_disagreement', '分歧过大'), ('low_confidence', '置信度不足'),
+        ('signal_fallback', '信号回退≥2'), ('low_price_edge', '低价edge不足'),
+        ('no_token', '无token_id'),
+    ]
+    _status_map = [
+        ('AUTO_SKIP', '自主引擎跳过'), ('GUARD_BLOCKED', '守门拒绝'),
+        ('SKIPPED', 'Kelly仓位过小'), ('PRICE_CHECK_FAILED', '价格校验失败'),
+    ]
+    _status_counts = defaultdict(int)
+    for _d in decisions:
+        _st = _d.get('order_result', {}).get('status', '')
+        for _k, _ in _status_map:
+            if _st == _k:
+                _status_counts[_k] += 1
+
+    print(f"\n📊 过滤漏斗 (扫描 {len(markets)}, 进入决策 {len(decisions)}, 下单 {trades_made}):")
+    _has_filter = False
+    for _k, _label in _funnel:
+        if filter_stats[_k] > 0:
+            print(f"   {_label}: {filter_stats[_k]}")
+            _has_filter = True
+    for _k, _label in _status_map:
+        if _status_counts[_k] > 0:
+            print(f"   {_label}: {_status_counts[_k]}")
+            _has_filter = True
+    if not _has_filter and len(decisions) == 0:
+        print(f"   ⚠️ 无市场进入决策（检查市场数据/API返回）")
+    if price_filtered:
+        _sorted_p = sorted(price_filtered)
+        print(f"   💡 价格过滤样本: 最低 {_sorted_p[0]:.0%}, 最高 {_sorted_p[-1]:.0%} "
+              f"(允许区间 {SWEET_SPOT_CONFIG['min_price']:.0%}-{SWEET_SPOT_CONFIG['max_price']:.0%})")
+    if liquidity_filtered:
+        _liq_thresh = SWEET_SPOT_CONFIG['min_liquidity'] if SWEET_SPOT_MODE else MIN_LIQUIDITY
+        print(f"   💡 流动性过滤样本: 最高 ${max(liquidity_filtered):,.0f} (阈值 ${_liq_thresh:,.0f})")
 
 
 if __name__ == "__main__":
