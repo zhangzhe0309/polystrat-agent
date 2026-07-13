@@ -1379,7 +1379,7 @@ def main():
                 "existing_positions": decisions,  # 本次运行已有的决策
                 "regime_data": regime_data,
                 "balance": balance,
-                "trade_size": balance * 0.05,  # 预估最大仓位
+                "trade_size": min(balance * 0.05, LIMITS_CONFIG["max_single_trade"]),  # 🔧 实际cap值（原 balance*0.05 > max_single_trade 导致预检查误拒）
                 "direction": direction,
                 "token_id": token_id,
                 "intended_price": order_price,
