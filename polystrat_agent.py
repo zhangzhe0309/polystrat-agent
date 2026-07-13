@@ -1618,9 +1618,9 @@ def main():
     print(f"   分析决策: {len(decisions)} 个")
     print(f"   本轮下单: {trades_made} 笔")
     
-    # 🆕 自主决策统计
-    auto_executed = sum(1 for d in decisions if d.get('order_result', {}).get('status') == 'DRY_RUN')
-    auto_skipped = sum(1 for d in decisions if d.get('order_result', {}).get('status') == 'AUTO_SKIP')
+    # 🆕 自主决策统计 (🔧 order_result 可能为 None，用 or {} 兜底)
+    auto_executed = sum(1 for d in decisions if (d.get('order_result') or {}).get('status') == 'DRY_RUN')
+    auto_skipped = sum(1 for d in decisions if (d.get('order_result') or {}).get('status') == 'AUTO_SKIP')
     if auto_skipped > 0:
         print(f"   自主引擎跳过: {auto_skipped} 个市场")
     print(f"   耗时: {elapsed:.1f} 秒")
