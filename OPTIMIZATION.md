@@ -849,3 +849,82 @@ confidence = min(1, total_words / 5)  # 5个词汇达到最高置信度
 | 权重数学 | ✅ | 归一化正确（adaptive 样本不足时 total≈1.15/LLM≈31%，样本充足时 total≈0.92/LLM≈29%），消除套利 0.5 稀释 |
 
 ⚠️ test_polystrat.py 的 29 errors 全部为 fcntl（Unix 专用模块）在 Windows 的环境问题，与本次修改无关，需在 VPS Linux 复验。
+
+---
+
+## 第十三轮优化 — 交易闭环修复（评审驱动，16 项）
+
+> 2026-07-13 基于 code-reviewer 三维度评审 + VPS 实跑验证。从"模拟盘能跑"推进到"交易闭环跑通"。
+
+### 评审 P0 修复（5 项，commit adfee71）
+- **Judge 价格锚定**：debate_engine `_judge_debate` prompt 删除 current_price 暴露与"结合市场价判断"指令 → 恢复 edge 发现能力（进入决策 0→4）
+- **断路器接入 PnL**：settlement_tracker 结算时调 `record_trade_result(pnl)` → 恢复 consecutive_losses/daily_pnl
+- **should_trade 传参**：guard_rail 原传 `(edge,confidence,direction)` 与签名不符（TypeError 被吞）→ 守门 risk_management 检查恢复
+- **CLOB 前置 + net_edge**：CLOB 校验从仓位后提到 Kelly 前，用真实价算 net_edge，反转/不足跳过 → 防纸上盈利实盘亏
+- **ML 特征去泄露**：移除 edge/direction 决策输出特征（循环论证），train_test_split 改 shuffle=False（时间泄露）
+
+### 评审遗留补全（3 项，commit cc998c7）
+- **断路器下单门禁**：下单条件加 `and check_breaker()`（原仅记录未拦截）
+- **No 方向 best_ask**：clob_validator 买 No token 用 best_ask（原误用 best_bid，No 单方向性亏损 bug）
+- **TP 注册守下单结果**：仅 `SUCCESS/DRY_RUN` 才 add_position（防失败单注册成幽灵仓位）
+
+### 增强（4 项，commit cc998c7）
+- **止盈接入主循环**：TakeProfitManager 初始化+监控+下单后 add_position（阶梯TP/追踪止损/时间止损）
+- **Debate provider 异构**：bull=github/bear=nvidia/judge=groq 三模型族（去盲点相关）
+- **信号权重重分配**：yes_bias/time_decay 无信号时剔除权重（不稀释 final_prob）
+- **confidence 解析加固**：兼容中英文/大小写
+
+### 限额放宽 + None bug（4 项，commit bb31dac/e279230/d0cdbea/d644978）
+- **守门预检查**：trade_size 用 `min(balance*0.05, max_single_trade)`（原 balance*0.05 > max_single_trade 误拒）
+- **trade_limits 放宽（模拟盘）**：max_position_pct 5%→25%、max_total_exposure $200→$500、max_single_trade $20→$50、max_daily_volume $100→$500
+- **结尾统计 None bug**：`d.get('order_result',{})` 当值为 None 时崩溃（order_result 键存在值 None，默认值不生效）→ 用 `or {}` 兜底（2 处：line 1622 + 1672）
+
+---
+
+## 当前运行状态验证（2026-07-13 VPS 实跑）
+
+| 验证项 | 结果 |
+|--------|------|
+| 交易闭环 | ✅ 7/10 产生第一笔模拟交易（下单 1 笔），TP 注册、net_edge、断路器门禁全部生效 |
+| 0 下单根因链 | 已全部清理：Judge锚定 → 限额预检查 → 累计仓位 → 结尾None → **当前: Sports分散保护** |
+| 7/13 0 下单 | **合理的分散化保护**：Sports 类别仓位 $234 > MAX_SAME_CATEGORY 20%（$200），系统拒绝继续加码 Sports（即便 edge 29% 强信号）|
+| 决策路径 | ✅ Judge 去锚定后进入决策从 0 提升到 3-4 |
+
+**结论：系统完全健康。** 0 下单是 `risk_management.MAX_SAME_CATEGORY` 的分散化保护在拒绝过度集中的 Sports 仓位，不是 bug。
+
+---
+
+## ⚽ 世界杯后重启检查清单（7/14 决赛结束后）
+
+世界杯 2026-07-14 结束后，Sports 仓位会逐步结算释放，候选池也会回归多样化。重启时按此清单检查：
+
+### 1. 基础验证
+```bash
+cd ~/polystrat-agent && git stash save "vps-local-$(date +%s)" 2>/dev/null; git pull origin main
+python3 polystrat_agent.py 2>&1 | tee /tmp/ps.log | grep -A 20 "过滤漏斗"
+```
+- 确认无 Traceback（两个 None bug 已修）
+- 看过滤漏斗：进入决策数、下单数
+
+### 2. 关键检查点
+- **Sports 仓位是否释放**：`grep "Sports 类别" /tmp/ps.log` —— 若不再是"已达上限"，说明决赛市场已结算
+- **候选池是否多样化**：`grep "类别过滤分布" /tmp/ps.log` —— 期待非 Sports 市场进入
+- **是否产生交易**：`grep "模拟 BUY" /tmp/ps.log` —— 多样化后应能下单非 Sports 市场
+
+### 3. 若仍 0 下单的排查路径
+按过滤漏斗定位卡点（漏斗已修复，会正常打印）：
+- **前期过滤多**（信号回退/分歧/类别）→ 市场池/信号质量问题
+- **进入决策但 order_result=None** → edge < 4%（alpha 稀缺，正常）
+- **守门拒绝** → grep 守门拒绝原因（限额/相关性/价差）
+- **类别已达上限** → 某类别仓位集中（分散保护生效）
+
+### 4. 已知剩余优化项（评审 B 的 MEDIUM/LOW，非阻塞）
+- onchain_monitor 实为 Gamma volume 查询（命名误导+循环论证）→ 重命名/降权
+- 市场池单一事件主导 → fetch 类别配额（若世界杯后仍集中再做）
+- market_regime 接近占位、情感无方向绑定、judge_weights 用命中率非校准度 → 信号质量改进
+- **注意**：`risk_management.MAX_SAME_CATEGORY=20%` / `MAX_TOTAL_POSITION=25%` 是分散化保护，**生产应保持**；模拟盘测试可临时放宽但勿长期
+
+### 5. 实盘前必做（当前 DRY_RUN，未涉及）
+- place_order LIVE 路径压测（部分成交/滑点）
+- TP 监控频率确认（当前 cron 触发，震荡行情可能滞后）
+- 用真实历史 CLOB 数据回测 net_edge 拦截后的 PnL 分布
