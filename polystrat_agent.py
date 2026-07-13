@@ -1669,7 +1669,7 @@ def main():
     ]
     _status_counts = defaultdict(int)
     for _d in decisions:
-        _st = _d.get('order_result', {}).get('status', '')
+        _st = (_d.get('order_result') or {}).get('status', '')
         for _k, _ in _status_map:
             if _st == _k:
                 _status_counts[_k] += 1
