@@ -167,8 +167,56 @@ def _normalize_confidence(confidence):
     return confidence_map.get(str(confidence).upper(), 0.5)
 
 
+def parse_market_category(m):
+    """
+    优先基于 Gamma API 的 tags 标签解析市场分类；
+    若 tags 缺省或匹配不到，回退到原生 category 字段及标题扩展词匹配，避免优质标的硬砍为 Other
+    """
+    raw_tags = m.get("tags", [])
+    tag_names = []
+    if isinstance(raw_tags, list):
+        for t in raw_tags:
+            if isinstance(t, dict):
+                tag_names.append(str(t.get("label", "") or t.get("slug", "")).lower())
+            elif isinstance(t, str):
+                tag_names.append(t.lower())
+
+    if any(t in tag_names for t in ["politics", "elections", "government", "us politics", "geopolitics", "law", "policy", "fed"]):
+        return "Politics"
+    if any(t in tag_names for t in ["sports", "soccer", "football", "nba", "epl", "champion", "tennis", "basketball", "ballon d'or"]):
+        return "Sports"
+    if any(t in tag_names for t in ["crypto", "bitcoin", "ethereum", "solana", "defi", "nft", "btc", "eth"]):
+        return "Crypto"
+    if any(t in tag_names for t in ["business", "finance", "economy", "macro", "fed", "interest rates", "stocks"]):
+        return "Business"
+    if any(t in tag_names for t in ["pop culture", "entertainment", "gaming", "movies", "music"]):
+        return "Entertainment"
+
+    cat_str = str(m.get("category", "")).strip().capitalize()
+    if cat_str in ["Politics", "Sports", "Crypto", "Business", "Technology", "Economics", "Geopolitics", "Entertainment"]:
+        return cat_str
+
+    title_lower = m.get("question", "").lower()
+    if any(x in title_lower for x in ["bitcoin", "btc", "crypto", "eth", "solana", "blockchain", "defi", "token"]):
+        return "Crypto"
+    if any(x in title_lower for x in ["trump", "biden", "election", "president", "democrat", "republican", "congress", "senate", "law", "bill", "act", "xi jinping", "fed", "rate", "minister", "prime"]):
+        return "Politics"
+    if any(x in title_lower for x in ["world cup", "fifa", "soccer", "football", "nba", "nfl", "mlb", "tennis", "golf", "boxing", "epl", "champion", "ballon d'or", "league"]):
+        return "Sports"
+    if any(x in title_lower for x in ["gta", "album", "movie", "oscar", "grammy", "rihanna", "carti", "taylor", "beyonce", "kanye"]):
+        return "Entertainment"
+    if any(x in title_lower for x in ["war", "china", "russia", "iran", "ukraine", "taiwan", "israel", "nato", "military"]):
+        return "Geopolitics"
+    if any(x in title_lower for x in ["fed", "interest", "inflation", "gdp", "stock", "recession", "economy", "unemployment"]):
+        return "Economics"
+    if any(x in title_lower for x in ["ai", "artificial intelligence", "chatgpt", "openai", "google", "apple", "tech"]):
+        return "Technology"
+
+    return "Other"
+
+
 def fetch_active_markets(limit=50):
-    """从 Gamma API 获取活跃市场，按流动性排序"""
+    """从 Gamma API 获取活跃市场，按流动性��序"""
     try:
         resp = requests.get(
             f"{GAMMA_API}/markets",
@@ -232,142 +280,8 @@ def fetch_active_markets(limit=50):
             except Exception:
                 outcome_list = ["Yes", "No"]
 
-            # 检测市场分类（扩展分类）
-            title_lower = title.lower()
-            if any(
-                x in title_lower
-                for x in [
-                    "bitcoin",
-                    "btc",
-                    "crypto",
-                    "eth",
-                    "solana",
-                    "blockchain",
-                    "defi",
-                ]
-            ):
-                category = "Crypto"
-            elif any(
-                x in title_lower
-                for x in [
-                    "trump",
-                    "biden",
-                    "election",
-                    "president",
-                    "democrat",
-                    "republican",
-                    "newsom",
-                    "aoc",
-                    "congress",
-                    "senate",
-                ]
-            ):
-                category = "Politics"
-            elif any(
-                x in title_lower
-                for x in [
-                    "world cup",
-                    "fifa",
-                    "soccer",
-                    "football",
-                    "nba",
-                    "nfl",
-                    "mlb",
-                    "tennis",
-                    "golf",
-                    "boxing",
-                ]
-            ):
-                category = "Sports"
-            elif any(
-                x in title_lower
-                for x in [
-                    "gta",
-                    "album",
-                    "movie",
-                    "oscar",
-                    "grammy",
-                    "rihanna",
-                    "carti",
-                    "taylor",
-                    "beyonce",
-                    "kanye",
-                ]
-            ):
-                category = "Entertainment"
-            elif any(
-                x in title_lower
-                for x in [
-                    "war",
-                    "china",
-                    "russia",
-                    "iran",
-                    "ukraine",
-                    "taiwan",
-                    "israel",
-                    "nato",
-                    "military",
-                ]
-            ):
-                category = "Geopolitics"
-            elif any(
-                x in title_lower
-                for x in [
-                    "fed",
-                    "interest",
-                    "inflation",
-                    "gdp",
-                    "stock",
-                    "recession",
-                    "economy",
-                    "unemployment",
-                ]
-            ):
-                category = "Economics"
-            elif any(
-                x in title_lower
-                for x in [
-                    "ai",
-                    "artificial intelligence",
-                    "chatgpt",
-                    "openai",
-                    "google",
-                    "apple",
-                    "tech",
-                ]
-            ):
-                category = "Technology"
-            elif any(
-                x in title_lower
-                for x in [
-                    "climate",
-                    "weather",
-                    "hurricane",
-                    "earthquake",
-                    "flood",
-                    "temperature",
-                ]
-            ):
-                category = "Weather"
-            elif any(
-                x in title_lower
-                for x in ["space", "nasa", "spacex", "mars", "moon", "rocket"]
-            ):
-                category = "Science"
-            elif any(
-                x in title_lower
-                for x in [
-                    "health",
-                    "covid",
-                    "vaccine",
-                    "disease",
-                    "pandemic",
-                    "hospital",
-                ]
-            ):
-                category = "Health"
-            else:
-                category = "Other"
+            # 检测市场分类（优先使用 tags 原生标签解析）
+            category = parse_market_category(m)
 
             valid.append(
                 {
@@ -700,6 +614,19 @@ def main():
     except Exception as e:
         log_error("settlement", e, "结算同步失败（非致命）")
 
+    # 加载交易历史
+    trade_history = load_trade_history()
+
+    # === CTF 代币无损合并（1 YES + 1 NO -> 1 USDC 现金）===
+    try:
+        from ctf_merger import auto_merge_portfolio
+        merge_res = auto_merge_portfolio(trade_history, dry_run=DRY_RUN)
+        if merge_res.get("merged_count", 0) > 0:
+            log.info(f"✨ [CTF Merge] 已无损合并 {merge_res['merged_count']} 组对冲仓位，释放资金 ${merge_res['total_usdc_recovered']:.2f} USDC")
+            print(f"✨ [CTF Merge] 已无损合并 {merge_res['merged_count']} 组对冲仓位，释放资金 ${merge_res['total_usdc_recovered']:.2f} USDC")
+    except Exception as e:
+        log_error("ctf_merger", e, "CTF 代币合并执行失败（非致命）")
+
     # === 套利扫描（Dutch Book + negRisk）===
     try:
         arb_result = scan_all_arbitrage()
@@ -831,6 +758,10 @@ def main():
         f"💰 动态价格阈值: {dynamic_thresholds['min_price']:.0%} - {dynamic_thresholds['max_price']:.0%}"
     )
     print()
+
+    # === 🆕 动态市场状态机集成 (QUIET / TRENDING / EVENT / REDUCE_ONLY) ===
+    from market_regime import MarketRegimeManager, MarketRegime
+    regime_mgr = MarketRegimeManager()
 
     # === 🆕 自主决策引擎集成 ===
     # 初始化策略发现器和决策引擎
