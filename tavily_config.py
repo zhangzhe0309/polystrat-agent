@@ -4,11 +4,12 @@ Tavily API 双 Key 自动切换
 """
 import os
 
-# 两个 Tavily API Key
-TAVILY_KEYS = [
-    os.environ.get("TAVILY_API_KEY_1", "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"),
-    os.environ.get("TAVILY_API_KEY_2", "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"),
-]
+# 优先从环境变量读取 Tavily API Key
+TAVILY_KEYS = [k for k in [
+    os.environ.get("TAVILY_API_KEY"),
+    os.environ.get("TAVILY_API_KEY_1"),
+    os.environ.get("TAVILY_API_KEY_2"),
+] if k]
 
 def get_working_key():
     """获取可用的 API Key"""
