@@ -55,24 +55,15 @@ PROVIDERS = {
         "max_tokens": 2000,
         "rpm_limit": 30,  # Groq free tier ~30 RPM
     },
-    "github": {
-        "name": "GitHub GPT-4o-mini",
-        "base_url": "https://models.inference.ai.azure.com",
-        "model": "gpt-4o-mini",
-        "key_env": "GITHUB_API_KEY",
-        "timeout": (5, 30),
-        "max_tokens": 2000,
-        "rpm_limit": 60,
-    },
     "agnes": {
-        "name": "AGNES agnes-2.0-flash",
+        "name": "AGNES 2.5 Flash",
         "base_url": "https://apihub.agnes-ai.com/v1",
-        "model": "agnes-2.0-flash",
+        "model": "agnes-2.5-flash",
         "key_env": "AGNES_API_KEY",
         "timeout": (5, 60),
         "max_tokens": 2000,
         "rpm_limit": 60,
-        "note": "agnes-2.0-flash 内置thinking，Bull/Bear角色需10-35s，Judge角色仅1-2s",
+        "note": "agnes-2.5-flash 速度极快，适合承担核心推理节点",
     },
     "gemini": {
         "name": "Gemini 3.1 Pro",
@@ -113,15 +104,15 @@ PROVIDERS = {
 }
 
 # === 辩论角色 → 平台分配 ===
-# 🔧 引入最新架构的 Gemini 3.1 Pro 模型，以及将 NVIDIA 更正为 DeepSeek V4
-#   github=GPT族 | nvidia=DeepSeek族 | groq=Llama族 | gemini=Gemini族
-#   - Bull: Gemini(3.1Pro) → GitHub → Groq → NVIDIA → AGNES → OpenRouter → GLM
-#   - Bear: NVIDIA(DeepSeek) → Gemini → GitHub → Groq → AGNES → OpenRouter → GLM
-#   - Judge: Groq(Llama) → Gemini → GitHub → NVIDIA → AGNES → OpenRouter → GLM
+# 🔧 引入最新架构的 Gemini 3.1 Pro 模型，以及将 NVIDIA 更正为 DeepSeek V4，用 AGNES 2.5 替代失效的 GPT-4o-mini
+#   agnes=Agnes族 | nvidia=DeepSeek族 | groq=Llama族 | gemini=Gemini族
+#   - Bull: Gemini(3.1Pro) → AGNES(2.5Flash) → Groq → NVIDIA → OpenRouter → GLM
+#   - Bear: NVIDIA(DeepSeek) → Gemini → AGNES → Groq → OpenRouter → GLM
+#   - Judge: Groq(Llama) → Gemini → AGNES → NVIDIA → OpenRouter → GLM
 ROLE_PROVIDERS = {
-    "bull": ["gemini", "github", "groq", "nvidia", "agnes", "openrouter", "glm"],
-    "bear": ["nvidia", "gemini", "github", "groq", "agnes", "openrouter", "glm"],
-    "judge": ["groq", "gemini", "github", "nvidia", "agnes", "openrouter", "glm"],
+    "bull": ["gemini", "agnes", "groq", "nvidia", "openrouter", "glm"],
+    "bear": ["nvidia", "gemini", "agnes", "groq", "openrouter", "glm"],
+    "judge": ["groq", "gemini", "agnes", "nvidia", "openrouter", "glm"],
 }
 
 # === 429 ���试配置 ===
