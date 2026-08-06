@@ -317,7 +317,15 @@ def load_model():
         if MODEL_CACHE.exists():
             with open(MODEL_CACHE, "rb") as f:
                 data = pickle.load(f)
-            return data.get("models"), data.get("scaler")
+            models = data.get("models")
+            scaler = data.get("scaler")
+            # 🔧 P0: 维度校验 — 旧缓存是 15 维(含 edge/direction),修复后训练/推理均为 13 维
+            # 不匹配则视为无缓存强制重训,避免 scaler.transform 维度错位 ValueError
+            expected_features = 13
+            if scaler is not None and hasattr(scaler, "n_features_in_") and scaler.n_features_in_ != expected_features:
+                print(f"⚠️ ML缓存维度过期(scaler={scaler.n_features_in_}≠{expected_features}),丢弃旧缓存强制重训")
+                return None, None
+            return models, scaler
         return None, None
     except Exception as e:
         print(f"⚠️ 加载模型失败: {e}")
@@ -525,15 +533,15 @@ def get_ml_signal(llm_prob, sentiment_score, edge, market_price, direction,
     # 新闻数量归一化
     news_count_norm = min(10, news_count) / 10
 
-    # 预测（15个特征，与 extract_features 一致）
-    # 只使用交易时可获取的市场信息，不使用决策输出
+    # 预测（13个特征，与 extract_features 严格对齐）
+    # 只使用交易时可获取的市场信息，不使用决策输出(edge/direction)
+    # 🔧 P0 修复: 原推理侧多构造了 abs(edge)/direction(共15维),训练侧已删只剩13维
+    # → scaler.transform 维度错位抛 ValueError 被 except 吞 → ml_prob 恒0.5,ML信号占25%权重却死亡
     feature = [
-        # 核心信号特征（5个）
+        # 核心信号特征（3个）
         llm_prob,
         sentiment_score,
-        abs(edge),
         market_price,
-        1 if direction == "Yes" else 0,
 
         # 链上信号特征（3个）
         onchain_confidence,

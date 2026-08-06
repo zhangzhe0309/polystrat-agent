@@ -270,7 +270,7 @@ class TakeProfitManager:
                     stage="TIME_EXIT",
                     exit_pct=position.remaining_pct,
                     exit_price=current_price,
-                    exit_size_usd=position.size_usdc * position.remaining_pct,
+                    exit_size_usdc=position.size_usdc * position.remaining_pct,
                     pnl_usd=self._calculate_pnl(position, current_price, position.remaining_pct),
                     reason=f"超时退出: {position.hours_held:.1f}h > {MAX_HOLD_HOURS}h",
                     urgency="medium",

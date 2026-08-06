@@ -293,6 +293,15 @@ def update_settled_trades():
                 except Exception as cb_err:
                     log.warning(f"断路器记录失败: {cb_err}")
 
+                # 🔧 P0-3: 释放 trade_limits.total_exposure 配额
+                # （原结算只调 record_trade_result 不调 record_close → 额度永久泄漏 →
+                #  max_total_exposure 池被占满 → can_trade 永久拒绝 → 系统静默停止下单）
+                try:
+                    from trade_limits import record_close
+                    record_close(float(trade.get("amount", 0)))
+                except Exception as tl_err:
+                    log.warning(f"额度释放失败: {tl_err}")
+
                 if result == "win":
                     stats["wins"] += 1
                 else:

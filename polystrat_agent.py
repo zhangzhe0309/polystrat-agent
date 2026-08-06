@@ -867,20 +867,28 @@ def main():
                         continue
                     sell_shares = pos.shares * ex.exit_pct
                     try:
-                        place_order(pos.token_id, "SELL", round(sell_shares, 2), ex.exit_price)
-                        # 记录 PnL 到断路器 + 平仓到限额
-                        try:
-                            record_trade_result(ex.pnl_usd)
-                        except Exception:
-                            pass
-                        try:
-                            from trade_limits import record_close
-                            record_close(ex.exit_size_usdc)
-                        except Exception:
-                            pass
-                        print(f"   💸 TP平仓: {pos.market_question[:40]} | {ex.stage} | 退出{ex.exit_pct:.0%} @ {ex.exit_price:.2f} | PnL ${ex.pnl_usd:+.2f}")
+                        sell_result = place_order(pos.token_id, "SELL", round(sell_shares, 2), ex.exit_price)
+                        sell_status = (sell_result or {}).get("status", "")
+                        # 只有真正成交(DRY_RUN/SUCCESS)才记账+释放额度;失败时回滚仓位等下次重试
+                        if sell_status in ("SUCCESS", "DRY_RUN"):
+                            try:
+                                record_trade_result(ex.pnl_usd)
+                            except Exception:
+                                pass
+                            try:
+                                from trade_limits import record_close
+                                record_close(ex.exit_size_usdc)
+                            except Exception:
+                                pass
+                            print(f"   💸 TP平仓: {pos.market_question[:40]} | {ex.stage} | 退出{ex.exit_pct:.0%} @ {ex.exit_price:.2f} | PnL ${ex.pnl_usd:+.2f}")
+                        else:
+                            # SELL 未成交:回滚 remaining_pct,避免仓位脱离 TP 管理 + 额度被误释放
+                            pos.remaining_pct = min(1.0, pos.remaining_pct + ex.exit_pct)
+                            log.warning(f"⚠️ TP平仓未成交({sell_status}): {pos.market_question[:40]} | {ex.stage} | 仓位保留 remaining={pos.remaining_pct:.0%} | {(sell_result or {}).get('message', '')}")
                     except Exception as sell_err:
-                        log.warning(f"TP平仓下单失败: {sell_err}")
+                        # 下单异常:同样回滚仓位,保留风控管理
+                        pos.remaining_pct = min(1.0, pos.remaining_pct + ex.exit_pct)
+                        log.warning(f"TP平仓下单异常,仓位保留: {sell_err}")
                 tp_manager._save_state()
     except Exception as tp_mon_err:
         log.warning(f"止盈监控失败: {tp_mon_err}")
@@ -1492,9 +1500,7 @@ def main():
                     "condition_id": condition_id,
                     "category": category,
                     "direction": direction,
-                    "market_price": yes_price
-                    if direction == "Yes"
-                    else market["no_price"],
+                    "market_price": order_price,  # CLOB真实成交价(原用Gamma价 yes_price 致 PnL 高估~24%)
                     "llm_prob": llm_prob,
                     "sentiment_score": sentiment_score,
                     "onchain_signal": onchain_signal,
