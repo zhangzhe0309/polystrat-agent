@@ -832,7 +832,9 @@ def main():
     print()
     
     # === 市场环境检测（一次性，用于所有市场）===
-    regime_data = detect_market_regime(markets, TRADE_LOG)
+    # 使用排名靠前的第一个市场作为流动性基准检测，或传空字典
+    sample_market = markets[0] if markets else {}
+    regime_data = detect_market_regime(sample_market, llm_disagreement=0.0, current_exposure_pct=0.0)
     print(f"📊 市场环境:")
     print(format_regime_report(regime_data))
     print()
@@ -844,6 +846,9 @@ def main():
     liquidity_filtered = []      # 被流动性过滤的样本
     category_filtered = []       # 被类别过滤的类别名（诊断分布）
     disagreement_filtered = []   # 被分歧阈值过滤的实际分歧值（诊断分布）
+
+    debates_made = 0             # LLM 深度分析计数器
+    MAX_DEBATES_PER_RUN = 5      # 每轮最多深度分析 5 个标的，防止 429 熔断
 
     for market in markets:
         # 全局超时检查：超过 900 秒硬截断（15分钟）
@@ -1001,9 +1006,15 @@ def main():
             print(f"⚠️ 多平台信号分析失败: {e}")
 
         # 6. LLM 分析概率（使用高级投票系统，返回加权平均和投票详情）
+        if debates_made >= MAX_DEBATES_PER_RUN:
+            print(f"⏸️ 深度分析已达本轮上限 ({MAX_DEBATES_PER_RUN})，提前退出以保护 API 额度")
+            break
+
         llm_prob, model_results, vote_details = llm_analyze_probability(
             title, news_text, yes_price, category
         )
+        debates_made += 1
+
         if llm_prob is None:
             filter_stats['llm_failed'] += 1
             continue
