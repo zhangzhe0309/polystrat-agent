@@ -204,9 +204,6 @@ def analyze_volume_change(market_slug, hours=24):
 
         if old_volume > 0:
             change = (current_volume - old_volume) / old_volume
-            # 累计量不可能下降（除非快照问题），若下降视为 0
-            if change < 0:
-                change = 0
         else:
             change = 0
 

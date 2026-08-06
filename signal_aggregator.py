@@ -96,8 +96,8 @@ class TradeSignal:
     
     @property
     def aggregation_key(self) -> str:
-        """聚合键: 同 token + 同 outcome = 同一信号"""
-        return f"{self.token_id}:{self.outcome}"
+        """聚合键: 同市场 + 同 token + 同方向 + 同 outcome = 同一信号"""
+        return f"{self.market_id}:{self.token_id}:{self.side}:{self.outcome}"
 
 
 @dataclass
@@ -280,9 +280,11 @@ class SignalAggregator:
         # 羊群效应检测
         is_herd = False
         total_wallets = max(1, len(self.target_wallets))
+        # 🔧 修复: 原 `>` 使池子≤3 时(threshold=max(3,int(n*0.5))≥3)永远无法触发。
+        # 改为 `>=`，3/3=100% 触发；1-2 个钱包仍不构成羊群。
         herd_threshold = max(3, int(total_wallets * HERD_FRACTION))
-        
-        if wallet_count > herd_threshold:
+
+        if wallet_count >= herd_threshold:
             is_herd = True
             multi_signal_mult = 1.0  # 羊群效应 → 不放大
             self.stats["herd_alerts"] += 1

@@ -98,12 +98,24 @@ def analyze_strategy_performance(trades):
         if cat not in categories:
             categories[cat] = 0
         categories[cat] += 1
-    
+
+    # 真实累计 PnL（基于结算结果）
+    total_pnl = 0.0
+    for t in trades:
+        result = t.get("result")
+        amount = t.get("amount", 0)
+        mp = t.get("market_price", 0.5)
+        if result == "win" and mp > 0:
+            total_pnl += amount * (1 - mp) / mp
+        elif result == "lose":
+            total_pnl -= amount
+
     return {
         "total_trades": total_trades,
         "win_rate": win_rate,
         "profit_factor": profit_factor,
         "avg_edge": avg_edge,
+        "total_pnl": total_pnl,
         "category_distribution": categories
     }
 
@@ -123,38 +135,61 @@ def backtest_strategy(trades, llm_weight=0.6, news_weight=0.4, edge_threshold=0.
     if not trades:
         return {
             "total_trades": 0,
+            "settled_trades": 0,
             "profitable_trades": 0,
             "losing_trades": 0,
             "win_rate": 0,
             "total_pnl": 0
         }
     
-    # 模拟回测
+    # 回测：用给定权重重建每笔已结算交易的信号，模拟"当时用该权重会下什么单、是否盈利"
     profitable_trades = 0
     losing_trades = 0
     total_pnl = 0
-    
+    settled_count = 0  # 用真实结果结算的交易数
+
     for trade in trades:
-        edge = abs(trade.get("edge", 0))
+        result = trade.get("result")
+        if result not in ("win", "lose"):
+            continue  # 未结算交易不参与（防止把"未来结果"当已知）
+
+        settled_count += 1
         amount = trade.get("amount", 2.0)
-        
-        # 模拟盈亏
-        if edge > edge_threshold:
-            # 有优势，假设盈利
-            pnl = amount * edge * 0.5  # 简化计算
+        mp = trade.get("market_price", 0.5)
+        llm_prob = trade.get("llm_prob", 0.5)
+        sentiment_score = trade.get("sentiment_score", 0)
+
+        # 用 llm_weight/news_weight 重建综合概率（与主程序信号融合口径一致）
+        sentiment_prob = max(0.15, min(0.85, 0.5 + sentiment_score * 0.35))
+        total_w = llm_weight + news_weight
+        final_prob = (llm_weight * llm_prob + news_weight * sentiment_prob) / total_w
+
+        # 判断该权重下会下的方向
+        dir_yes = final_prob >= mp
+        edge = abs(final_prob - mp)
+        if edge < edge_threshold:
+            continue  # 该权重组合下不会下单
+
+        # 组合方向与真实记录方向是否一致 → 决定真实结果下的盈亏
+        record_dir = trade.get("direction")
+        same_dir = (dir_yes and record_dir == "Yes") or (not dir_yes and record_dir == "No")
+        won = (result == "win") if same_dir else (result == "lose")
+
+        if won:
+            pnl = amount * (1 - mp) / mp if mp > 0 else 0
             profitable_trades += 1
         else:
-            # 无优势，假设亏损
-            pnl = -amount * 0.1
+            pnl = -amount
             losing_trades += 1
-        
+
         total_pnl += pnl
     
     total_trades = len(trades)
-    win_rate = profitable_trades / total_trades if total_trades > 0 else 0
+    win_rate = profitable_trades / settled_count if settled_count > 0 else 0
     
     return {
         "total_trades": total_trades,
+        "settled_trades": settled_count,
         "profitable_trades": profitable_trades,
         "losing_trades": losing_trades,
         "win_rate": win_rate,

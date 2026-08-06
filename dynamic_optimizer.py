@@ -115,8 +115,13 @@ def calculate_llm_model_weights(trades=None, window_days=7):
         actual_result = trade.get("result", "")
         if actual_result not in ("win", "lose"):
             continue
+        direction = trade.get("direction", "")
 
-        actual_is_win = actual_result == "win"
+        # 由 result+direction 反推"Yes 是否实际胜出"（模型预测都是 Yes 概率）
+        # Yes 实际赢 ⇔ (方向=Yes 且 win) 或 (方向=No 且 lose)
+        yes_won = (direction == "Yes" and actual_result == "win") or (
+            direction == "No" and actual_result == "lose"
+        )
 
         for model_result in model_results:
             # 与 polystrat_agent.py 一致：格式 "ModelName:XX¢"
@@ -129,9 +134,9 @@ def calculate_llm_model_weights(trades=None, window_days=7):
                     print(f"⚠️ 模型预测概率解析失败: {e}")
                     continue
 
-                # 判断预测是否正确
-                predicted_win = pred_prob > 0.5
-                if predicted_win == actual_is_win:
+                # 方向感知：模型预测"Yes 赢"(>0.5) 与"Yes 实际是否赢"比较
+                predicted_yes_won = pred_prob > 0.5
+                if predicted_yes_won == yes_won:
                     model_stats[model_name]["correct"] += 1
                 model_stats[model_name]["total"] += 1
 
