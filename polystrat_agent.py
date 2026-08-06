@@ -104,9 +104,9 @@ SWEET_SPOT_CONFIG = {
     "max_price": 0.90,      # 🔧 v4.2: 0.40→0.90，允许Yes Bias逆向入场（Yes>70%）
     "min_liquidity": 15000, # 最低流动性 $15k（稍微放宽）
     "min_disagreement": 3,  # 🔧 5%→3% (实测LLM分歧≤1.8%，5%误杀；见 sr-improvement-plan.md)
-    "max_disagreement": 40, # 最高投票分歧 40%（避免噪声）
+    "max_disagreement": 45, # 最高投票分歧 45%（避免过度严苛）
     "min_confidence": 0.50, # 🔧 v4.2: 0.60→0.50，匹配should_trade阈值
-    "preferred_categories": ["Politics", "Sports", "Crypto", "Economics", "Technology"],
+    "preferred_categories": ["Politics", "Sports", "Crypto", "Economics", "Technology", "Geopolitics", "Business", "Entertainment"],
     "low_price_edge_min": 0.08,  # 低价市场(<0.10)的最小edge要求
 }
 
@@ -215,8 +215,8 @@ def parse_market_category(m):
     return "Other"
 
 
-def fetch_active_markets(limit=50):
-    """从 Gamma API 获取活跃市场，按流动性��序"""
+def fetch_active_markets(limit=150):
+    """从 Gamma API 获取活跃市场，按流动性排序"""
     try:
         resp = requests.get(
             f"{GAMMA_API}/markets",
@@ -636,8 +636,8 @@ def main():
     except Exception as e:
         log_error("arbitrage", e, "套利扫描失败（非致命）")
 
-    # 1. 获取活跃市场（按流动性排序取前50，覆盖更多机会）
-    markets = fetch_active_markets(limit=50)
+    # 1. 获取活跃市场（按 24h 交易量排序取前 150，覆盖更多机会）
+    markets = fetch_active_markets(limit=150)
     if not markets:
         return  # 无市场，静默
 
