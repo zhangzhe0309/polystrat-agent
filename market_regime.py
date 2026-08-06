@@ -81,16 +81,18 @@ class MarketRegimeManager:
         if last_p is not None and last_ts is not None:
             time_delta = now - last_ts
             price_change = abs(yes_price - last_p)
+            liquidity = float(market_obj.get("liquidityNum") or market_obj.get("liquidity") or 0.0)
 
             # 5 分钟内价格突变 > 15% 或 LLM 分歧 > 45% -> 触发 EVENT 爆破熔断
-            if (time_delta < 300 and price_change > 0.15) or llm_disagreement > 0.45:
+            # 补丁：必须伴随流动性抽干或高分歧，避免低流动性市场的恶意“画门”插针
+            if (time_delta < 300 and price_change > 0.15 and liquidity < 50000) or llm_disagreement > 0.45:
                 self.event_halt_until = now + self.cool_off_duration_sec
-                log.warning(f"💥 [Regime EVENT Triggered] 触发突发事件熔断: ΔP={price_change:.2f}, LLM分歧={llm_disagreement*100:.1f}%")
+                log.warning(f"💥 [Regime EVENT Triggered] 触发突发事件熔断: ΔP={price_change:.2f}, LLM分歧={llm_disagreement*100:.1f}%, Liq=${liquidity:,.0f}")
                 return {
                     "regime": MarketRegime.EVENT,
                     "allow_new_trade": False,
                     "size_multiplier": 0.0,
-                    "reason": f"[EVENT] Sudden volatility spike ΔP={price_change:.2f}"
+                    "reason": f"[EVENT] Sudden volatility spike ΔP={price_change:.2f} with low liq"
                 }
 
             # 5 分钟内价格单边动量 > 6% -> 触发 TRENDING 趋势模式 (仓位降额 50%)

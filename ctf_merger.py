@@ -141,9 +141,10 @@ def execute_ctf_merge(
         return {"success": False, "reason": str(e)}
 
 
-def auto_merge_portfolio(positions: List[Dict[str, Any]], dry_run: bool = True) -> Dict[str, Any]:
+def auto_merge_portfolio(positions: List[Dict[str, Any]], dry_run: bool = True, evaluate_rebate: bool = True) -> Dict[str, Any]:
     """
-    全自动检测并合并持仓组合中的匹配对冲单
+    全自动检测并合并持仓组合中的匹配对冲单。
+    补充逻辑：若 evaluate_rebate=True，将在后续版本中比对 Maker Rebate 与 Polygon Gas，如果挂单吃返佣收益更大，则跳过合并。
     """
     mergeables = detect_mergeable_positions(positions)
     if not mergeables:
