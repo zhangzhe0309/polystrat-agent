@@ -176,7 +176,7 @@ def fetch_active_markets(limit=50):
                 "closed": "false",
                 "limit": limit,
                 "active": "true",
-                "order": "liquidityNum",
+                "order": "volume24hr",
                 "ascending": "false",
             },
             timeout=30,
