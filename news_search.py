@@ -110,6 +110,10 @@ def search_gnews(query, max_results=5):
                              "source_type": "gnews"}
                             for a in articles
                         ]
+                    elif resp2.status_code == 429:
+                        _gnews_cooldown = True
+                        print(f"⚠️ GNews API 429 限流 (重试简化查询时)，本轮会话内跳过GNews")
+                        return []
                 except Exception:
                     pass
             print(f"⚠️ GNews API 400 Bad Request (query='{safe_query}')")

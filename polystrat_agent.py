@@ -1267,19 +1267,20 @@ def main():
         time_decay_weight = SIGNAL_WEIGHTS["time_decay"] if time_decay_result["signal"] != 0 else 0
 
         # 动态权重：如果某个信号失效/无数据，则将其权重设为0，防止0.5的默认值拉平final_prob
+        actual_sentiment_weight = sentiment_weight if news_text.strip() else 0
         actual_ml_weight = ml_weight if not (_ml_api_failed or _ml_no_data) else 0
-        actual_onchain_weight = onchain_weight if not _onchain_api_failed else 0
+        actual_onchain_weight = onchain_weight if not _onchain_api_failed and onchain_recommendation != "hold" else 0
         actual_micro_weight = MICROSTRUCTURE_CONFIG["weight"] if microstructure_prob >= MICROSTRUCTURE_CONFIG["min_confidence"] and microstructure_recommendation != "hold" else 0
 
         # 统一加权融合（套利不表达概率已移除；条件信号无信号时权重=0不参与，防稀释）
         total_weight = (
-            llm_weight + sentiment_weight + actual_onchain_weight + actual_ml_weight
+            llm_weight + actual_sentiment_weight + actual_onchain_weight + actual_ml_weight
             + actual_micro_weight
             + yes_bias_weight + time_decay_weight
         )
         final_prob = (
             llm_signal_prob * llm_weight
-            + sentiment_signal_prob * sentiment_weight
+            + sentiment_signal_prob * actual_sentiment_weight
             + onchain_signal_prob * actual_onchain_weight
             + ml_signal_prob * actual_ml_weight
             + microstructure_signal_prob * actual_micro_weight
