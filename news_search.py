@@ -44,14 +44,25 @@ RSS_FEEDS = {
 }
 
 
+# GNews API 会话级冷却（429 限流和 400 错误均记录，避免本轮重复击打已限流API）
+_gnews_cooldown = False  # True=本次进程内全面跳过GNews
+
+
 def search_gnews(query, max_results=5):
     """
-    使用 GNews API 搜索新闻
+    使用 GNews API 搜索新闻（429计入会话冷却，避免重复限流）
     """
+    global _gnews_cooldown
+    if _gnews_cooldown:
+        return []  # 本次运行内已限流，直接跳过
+    if not GNEWS_API_KEY:
+        return []
     try:
         url = "https://gnews.io/api/v4/search"
+        # 查询不超过 60 字，防止 400 Bad Request
+        safe_query = query[:60].strip()
         params = {
-            "q": query,
+            "q": safe_query,
             "lang": "en",
             "max": min(max_results, 10),
             "apikey": GNEWS_API_KEY,
@@ -78,6 +89,31 @@ def search_gnews(query, max_results=5):
                 )
 
             return news
+        elif resp.status_code == 429:
+            # API 配额耗尽：记录会话冷却，后续所有市场全部跳过 GNews
+            _gnews_cooldown = True
+            print(f"⚠️ GNews API 429 限流，本轮会话内跳过GNews（改用RSS备用）")
+            return []
+        elif resp.status_code == 400:
+            # 尝试简化查询与重试
+            simplified = safe_query.split()[0] if safe_query else ""
+            if simplified and simplified != safe_query:
+                try:
+                    resp2 = requests.get(url, params={**params, "q": simplified}, timeout=10)
+                    if resp2.status_code == 200:
+                        articles = resp2.json().get("articles", [])
+                        return [
+                            {"title": a.get("title", ""), "description": a.get("description", ""),
+                             "content": a.get("content", ""), "url": a.get("url", ""),
+                             "published_at": a.get("publishedAt", ""),
+                             "source": a.get("source", {}).get("name", ""),
+                             "source_type": "gnews"}
+                            for a in articles
+                        ]
+                except Exception:
+                    pass
+            print(f"⚠️ GNews API 400 Bad Request (query='{safe_query}')")
+            return []
         else:
             print(f"⚠️ GNews API 错误: {resp.status_code}")
             return []

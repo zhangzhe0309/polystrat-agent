@@ -1046,6 +1046,7 @@ def main():
             print(f"⚠️ 情感分析失败: {e}")
 
         # 4. 链上信号分析
+        _onchain_api_failed = False
         try:
             onchain_signal = get_onchain_signal(title)
             onchain_recommendation = onchain_signal.get("recommendation", "hold")
@@ -1054,6 +1055,7 @@ def main():
             onchain_signal = {"recommendation": "hold", "confidence": 0.3}
             onchain_recommendation = "hold"
             onchain_confidence = 0.3
+            _onchain_api_failed = True
             print(f"⚠️ 链上信号分析失败: {e}")
 
         # 5. 多平台信号分析
@@ -1128,6 +1130,37 @@ def main():
             except:
                 time_to_expiry = 0
 
+        # 信号5: 市场微观结构信号（订单簿、价差、成交量）
+        if MICROSTRUCTURE_CONFIG["enabled"]:
+            try:
+                microstructure_signal = calculate_microstructure_signal(
+                    condition_id, token_id, market.get("slug")
+                )
+                microstructure_prob = microstructure_signal.get("confidence", 0.3)
+                microstructure_recommendation = microstructure_signal.get("recommendation", "hold")
+
+                # 将微观结构信号转换为概率
+                if microstructure_recommendation == "buy":
+                    microstructure_signal_prob = 0.5 + 0.2 * microstructure_prob
+                elif microstructure_recommendation == "sell":
+                    microstructure_signal_prob = 0.5 - 0.2 * microstructure_prob
+                else:
+                    microstructure_signal_prob = 0.5
+
+                microstructure_signal_prob = max(0.01, min(0.99, microstructure_signal_prob))
+
+                # 低置信度 = 订单簿流动性不足，是正常中性信号，不计入回退
+
+            except Exception as e:
+                microstructure_signal = {"recommendation": "hold", "confidence": 0.3}
+                microstructure_signal_prob = 0.5
+                signal_fallbacks += 1
+                print(f"⚠️ 微观结构信号分析失败: {e}")
+        else:
+            microstructure_signal = {"recommendation": "hold", "confidence": 0.3}
+            microstructure_signal_prob = 0.5
+
+        _ml_api_failed = False
         try:
             ml_signal = get_ml_signal(
                 llm_prob,
@@ -1145,6 +1178,7 @@ def main():
             ml_prob = ml_signal.get("ml_prob", 0.5)
             ml_confidence = ml_signal.get("confidence", 0.5)
         except Exception as e:
+            _ml_api_failed = True
             ml_signal = {
                 "ml_prob": 0.5,
                 "confidence": 0.5,
@@ -1170,8 +1204,10 @@ def main():
         sentiment_mapping_slope = adaptive_weights.get("sentiment_mapping_slope", 0.35)
         sentiment_signal_prob = 0.5 + sentiment_score * sentiment_mapping_slope
         sentiment_signal_prob = max(0.15, min(0.85, sentiment_signal_prob))
-        if sentiment_score == 0 and sentiment_confidence == 0:
-            signal_fallbacks += 1  # 情感信号完全回退
+        # 情感回退：仅当 news_text 完全为空（包括RSS也无内容）才计入回退
+        # 沨意：付费API失败但RSS有内容时不应计为回退
+        if not news_text.strip():
+            signal_fallbacks += 1  # 新闻完全为空（所有源匹失败）
 
         # 信号3: 链上概率（连续映射，纳入置信度 × 自适应乘数）
         onchain_confidence_val = onchain_signal.get("confidence", 0.3)
@@ -1186,46 +1222,19 @@ def main():
             onchain_signal_prob = 0.5 - 0.15 * onchain_confidence_val * onchain_mult
         else:
             onchain_signal_prob = 0.5
-            if onchain_recommendation == "hold" and onchain_confidence_val <= 0.3:
-                signal_fallbacks += 1  # 链上信号无有效数据
+            # 链上回退：仅当 API 实际抛出异常才计入回退
+            # 市场未在热门列表中找到（recommendation=hold）是正常中性信号，不计为回退
+            if _onchain_api_failed:
+                signal_fallbacks += 1  # API实际异常才计回退
         onchain_signal_prob = max(0.01, min(0.99, onchain_signal_prob))  # 边界保护
 
         # 信号4: ML 概率（已经是概率，直接使用）
         ml_signal_prob = ml_prob
-        if ml_confidence <= 0.5 and ml_prob == 0.5:
-            signal_fallbacks += 1  # ML 信号无有效数据
-
-        # 信号5: 市场微观结构信号（订单簿、价差、成交量）
-        if MICROSTRUCTURE_CONFIG["enabled"]:
-            try:
-                microstructure_signal = calculate_microstructure_signal(
-                    condition_id, token_id, market.get("slug")
-                )
-                microstructure_prob = microstructure_signal.get("confidence", 0.3)
-                microstructure_recommendation = microstructure_signal.get("recommendation", "hold")
-
-                # 将微观结构信号转换为概率
-                if microstructure_recommendation == "buy":
-                    microstructure_signal_prob = 0.5 + 0.2 * microstructure_prob
-                elif microstructure_recommendation == "sell":
-                    microstructure_signal_prob = 0.5 - 0.2 * microstructure_prob
-                else:
-                    microstructure_signal_prob = 0.5
-
-                microstructure_signal_prob = max(0.01, min(0.99, microstructure_signal_prob))
-
-                # 检查置信度
-                if microstructure_prob < MICROSTRUCTURE_CONFIG["min_confidence"]:
-                    signal_fallbacks += 1
-
-            except Exception as e:
-                microstructure_signal = {"recommendation": "hold", "confidence": 0.3}
-                microstructure_signal_prob = 0.5
-                signal_fallbacks += 1
-                print(f"⚠️ 微观结构信号分析失败: {e}")
-        else:
-            microstructure_signal = {"recommendation": "hold", "confidence": 0.3}
-            microstructure_signal_prob = 0.5
+        # ML回退："数据不足"是已知中性状态，不计为信号失败
+        # 仅当 ML 已训练但预测结果也是0.5+低置信度，才计入回退
+        _ml_no_data = ml_signal.get('recommendation') == '数据不足'
+        if _ml_api_failed or (not _ml_no_data and ml_confidence <= 0.5 and ml_prob == 0.5):
+            signal_fallbacks += 1  # API异常 或 ML已训练但预测平坦无效
 
         # 信号6: 多平台/套利信号 — 🔧 P2-1: 不参与概率融合
         # 套利是跨平台价格差异，不表达事件概率。原代码用恒定 0.5 参与加权，
@@ -1257,21 +1266,26 @@ def main():
         yes_bias_weight = SIGNAL_WEIGHTS["yes_bias"] if yes_bias_result["strength"] != "none" else 0
         time_decay_weight = SIGNAL_WEIGHTS["time_decay"] if time_decay_result["signal"] != 0 else 0
 
+        # 动态权重：如果某个信号失效/无数据，则将其权重设为0，防止0.5的默认值拉平final_prob
+        actual_ml_weight = ml_weight if not (_ml_api_failed or _ml_no_data) else 0
+        actual_onchain_weight = onchain_weight if not _onchain_api_failed else 0
+        actual_micro_weight = MICROSTRUCTURE_CONFIG["weight"] if microstructure_prob >= MICROSTRUCTURE_CONFIG["min_confidence"] and microstructure_recommendation != "hold" else 0
+
         # 统一加权融合（套利不表达概率已移除；条件信号无信号时权重=0不参与，防稀释）
         total_weight = (
-            llm_weight + sentiment_weight + onchain_weight + ml_weight
-            + MICROSTRUCTURE_CONFIG["weight"]
+            llm_weight + sentiment_weight + actual_onchain_weight + actual_ml_weight
+            + actual_micro_weight
             + yes_bias_weight + time_decay_weight
         )
         final_prob = (
             llm_signal_prob * llm_weight
             + sentiment_signal_prob * sentiment_weight
-            + onchain_signal_prob * onchain_weight
-            + ml_signal_prob * ml_weight
-            + microstructure_signal_prob * MICROSTRUCTURE_CONFIG["weight"]
+            + onchain_signal_prob * actual_onchain_weight
+            + ml_signal_prob * actual_ml_weight
+            + microstructure_signal_prob * actual_micro_weight
             + yes_bias_prob * yes_bias_weight
             + time_decay_prob * time_decay_weight
-        ) / total_weight  # 归一化，防止权重膨胀
+        ) / total_weight if total_weight > 0 else 0.5  # 归一化，防止权重膨胀
 
         # 边界检查
         final_prob = max(0.01, min(0.99, final_prob))

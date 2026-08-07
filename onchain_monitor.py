@@ -59,7 +59,7 @@ def get_market_volume(market_slug):
 
 def get_trending_markets(limit=10):
     """
-    获取热门市场
+    获取热门市场（支持 volume_24hr 降级为 liquidityNum，防止 422 报错）
 
     Args:
         limit: 最大结果数
@@ -67,57 +67,71 @@ def get_trending_markets(limit=10):
     Returns:
         list: 热门市场列表
     """
-    try:
-        url = f"{GAMMA_API}/markets"
-        params = {
-            "closed": "false",
-            "limit": limit * 2,
-            "active": "true",
-            "order": "volume_24hr",
-            "ascending": "false",
-        }
+    # 优先按24h成交量排序；若 API 不支持该参数（422），自动降级到流动性排序
+    ORDER_PARAMS = [
+        {"order": "volume_24hr", "ascending": "false"},
+        {"order": "liquidityNum",  "ascending": "false"},  # fallback
+    ]
 
-        resp = requests.get(url, params=params, timeout=10)
-
-        if resp.status_code == 200:
-            markets = resp.json()
-
-            trending = []
-            for market in markets:
-                volume = float(market.get("volume", 0))
-                liquidity = float(market.get("liquidityNum", 0))
-
-                # 过滤有交易量的市场
-                if volume > 10000:
-                    try:
-                        prices_str = market.get("outcomePrices", "[0.5]")
-                        if isinstance(prices_str, str):
-                            prices = json.loads(prices_str)
-                        else:
-                            prices = prices_str
-                        yes_price = float(prices[0]) if prices else 0.5
-                    except (json.JSONDecodeError, ValueError, TypeError) as e:
-                        print(f"⚠️ 热门市场价格解析失败: {e}")
-                        yes_price = 0.5
-
-                    trending.append(
-                        {
-                            "title": market.get("question", ""),
-                            "slug": market.get("slug", ""),
-                            "volume": volume,
-                            "liquidity": liquidity,
-                            "yes_price": yes_price,
-                        }
-                    )
-
-            return trending[:limit]
-        else:
-            print(f"⚠️ 获取热门市场失败: {resp.status_code}")
+    def _parse_markets(markets_json):
+        if not isinstance(markets_json, list):
+            print("⚠️ 热门市场返回非列表数据")
             return []
+            
+        trending = []
+        for market in markets_json:
+            if not isinstance(market, dict):
+                continue
+                
+            vol = market.get("volume")
+            volume = float(vol) if vol is not None else 0.0
+            
+            liq = market.get("liquidityNum")
+            liquidity = float(liq) if liq is not None else 0.0
+            
+            if volume > 10000:
+                try:
+                    prices_str = market.get("outcomePrices", "[0.5]")
+                    prices = json.loads(prices_str) if isinstance(prices_str, str) else prices_str
+                    yes_price = float(prices[0]) if prices else 0.5
+                except (json.JSONDecodeError, ValueError, TypeError, IndexError):
+                    yes_price = 0.5
+                trending.append({
+                    "title": market.get("question", ""),
+                    "slug": market.get("slug", ""),
+                    "volume": volume,
+                    "liquidity": liquidity,
+                    "yes_price": yes_price,
+                })
+        return trending[:limit]
 
-    except Exception as e:
-        print(f"⚠️ 获取热门市场失败: {e}")
-        return []
+    url = f"{GAMMA_API}/markets"
+    for order_opts in ORDER_PARAMS:
+        try:
+            params = {
+                "closed": "false",
+                "limit": limit * 2,
+                "active": "true",
+                **order_opts,
+            }
+            resp = requests.get(url, params=params, timeout=10)
+            if resp.status_code == 200:
+                return _parse_markets(resp.json())
+            elif resp.status_code in (422, 400):
+                # 不支持该排序参数，尝试降级
+                print(f"⚠️ 热门市场接口 {resp.status_code}（order={order_opts['order']}），尝试降级")
+                continue
+            else:
+                print(f"⚠️ 获取热门市场失败: {resp.status_code}")
+                continue
+        except requests.RequestException as e:
+            print(f"⚠️ 获取热门市场网络异常: {e}")
+            continue
+        except Exception as e:
+            print(f"⚠️ 获取热门市场异常: {e}")
+            continue
+
+    return []  # 所有参数均失败
 
 
 def _load_volume_snapshot(market_slug):
