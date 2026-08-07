@@ -83,11 +83,13 @@ def get_trending_markets(limit=10):
             if not isinstance(market, dict):
                 continue
                 
-            vol = market.get("volume")
-            volume = float(vol) if vol is not None else 0.0
-            
-            liq = market.get("liquidityNum")
-            liquidity = float(liq) if liq is not None else 0.0
+            try:
+                vol = market.get("volume")
+                volume = float(vol) if vol is not None else 0.0
+                liq = market.get("liquidityNum")
+                liquidity = float(liq) if liq is not None else 0.0
+            except (ValueError, TypeError):
+                continue
             
             if volume > 10000:
                 try:
