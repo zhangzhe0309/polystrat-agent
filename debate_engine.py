@@ -55,29 +55,29 @@ PROVIDERS = {
         "max_tokens": 2000,
         "rpm_limit": 30,  # Groq free tier ~30 RPM
     },
-    "github": {
-        "name": "GitHub GPT-4o-mini",
-        "base_url": "https://models.inference.ai.azure.com",
-        "model": "gpt-4o-mini",
-        "key_env": "GITHUB_API_KEY",
-        "timeout": (5, 30),
-        "max_tokens": 2000,
-        "rpm_limit": 60,
-    },
     "agnes": {
-        "name": "AGNES agnes-2.0-flash",
+        "name": "AGNES 2.5 Flash",
         "base_url": "https://apihub.agnes-ai.com/v1",
-        "model": "agnes-2.0-flash",
+        "model": "agnes-2.5-flash",
         "key_env": "AGNES_API_KEY",
         "timeout": (5, 60),
         "max_tokens": 2000,
         "rpm_limit": 60,
-        "note": "agnes-2.0-flash 内置thinking，Bull/Bear角色需10-35s，Judge角色仅1-2s",
+        "note": "agnes-2.5-flash 速度极快，适合承担核心推理节点",
+    },
+    "gemini": {
+        "name": "Gemini 3.1 Pro",
+        "base_url": "http://localhost:3404/v1",
+        "model": "gemini-3.1-pro-low",
+        "key_env": "GEMINI_DUMMY",
+        "timeout": (5, 30),
+        "max_tokens": 2000,
+        "rpm_limit": 60,
     },
     "nvidia": {
-        "name": "NVIDIA GLM-5.2",
+        "name": "NVIDIA DeepSeek V4",
         "base_url": "https://integrate.api.nvidia.com/v1",
-        "model": "z-ai/glm-5.2",
+        "model": "deepseek-ai/deepseek-v4-flash",
         "key_env": "NVIDIA_API_KEY_2",
         "timeout": (5, 30),
         "max_tokens": 2000,
@@ -104,19 +104,18 @@ PROVIDERS = {
 }
 
 # === 辩论角色 → 平台分配 ===
-# 🔧 恢复异构 provider 链：三角色主力来自不同模型族（GPT/GLM/Llama）
-# 原配置三角色主力同为 GitHub(gpt-4o-mini) → 伪多样性，盲点相关
-#   github=GPT族 | nvidia=GLM族 | groq=Llama族
-#   - Bull: GitHub(GPT) → Groq → NVIDIA → AGNES → OpenRouter → GLM
-#   - Bear: NVIDIA(GLM) → GitHub → Groq → AGNES → OpenRouter → GLM
-#   - Judge: Groq(Llama) → GitHub → NVIDIA → AGNES → OpenRouter → GLM
+# 🔧 引入最新架构的 Gemini 3.1 Pro 模型，以及将 NVIDIA 更正为 DeepSeek V4，用 AGNES 2.5 替代失效的 GPT-4o-mini
+#   agnes=Agnes族 | nvidia=DeepSeek族 | groq=Llama族 | gemini=Gemini族
+#   - Bull: Gemini(3.1Pro) → AGNES(2.5Flash) → Groq → NVIDIA → OpenRouter → GLM
+#   - Bear: NVIDIA(DeepSeek) → Gemini → AGNES → Groq → OpenRouter → GLM
+#   - Judge: Groq(Llama) → Gemini → AGNES → NVIDIA → OpenRouter → GLM
 ROLE_PROVIDERS = {
-    "bull": ["github", "groq", "nvidia", "agnes", "openrouter", "glm"],
-    "bear": ["nvidia", "github", "groq", "agnes", "openrouter", "glm"],
-    "judge": ["groq", "github", "nvidia", "agnes", "openrouter", "glm"],
+    "bull": ["gemini", "agnes", "groq", "nvidia", "openrouter", "glm"],
+    "bear": ["nvidia", "gemini", "agnes", "groq", "openrouter", "glm"],
+    "judge": ["groq", "gemini", "agnes", "nvidia", "openrouter", "glm"],
 }
 
-# === 429 重试配置 ===
+# === 429 ���试配置 ===
 MAX_RETRIES = 1           # 每个provider最多重试1次（快速fallback比等待更好）
 RETRY_BASE_DELAY = 2      # 基础等待2秒
 RETRY_MAX_DELAY = 8       # 最大等待8秒
@@ -127,6 +126,8 @@ def _get_api_key(provider_id):
     p = PROVIDERS.get(provider_id)
     if not p:
         return None
+    if provider_id == "gemini":
+        return "proxy-handled"  # 走本地端口，不验key
     return os.environ.get(p["key_env"], "")
 
 

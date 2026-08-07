@@ -104,9 +104,9 @@ SWEET_SPOT_CONFIG = {
     "max_price": 0.90,      # 🔧 v4.2: 0.40→0.90，允许Yes Bias逆向入场（Yes>70%）
     "min_liquidity": 15000, # 最低流动性 $15k（稍微放宽）
     "min_disagreement": 3,  # 🔧 5%→3% (实测LLM分歧≤1.8%，5%误杀；见 sr-improvement-plan.md)
-    "max_disagreement": 40, # 最高投票分歧 40%（避免噪声）
+    "max_disagreement": 45, # 最高投票分歧 45%（避免过度严苛）
     "min_confidence": 0.50, # 🔧 v4.2: 0.60→0.50，匹配should_trade阈值
-    "preferred_categories": ["Politics", "Sports", "Crypto", "Economics", "Technology"],
+    "preferred_categories": ["Politics", "Sports", "Crypto", "Economics", "Technology", "Geopolitics", "Business", "Entertainment"],
     "low_price_edge_min": 0.08,  # 低价市场(<0.10)的最小edge要求
 }
 
@@ -167,7 +167,55 @@ def _normalize_confidence(confidence):
     return confidence_map.get(str(confidence).upper(), 0.5)
 
 
-def fetch_active_markets(limit=50):
+def parse_market_category(m):
+    """
+    优先基于 Gamma API 的 tags 标签解析市场分类；
+    若 tags 缺省或匹配不到，回退到原生 category 字段及标题扩展词匹配，避免优质标的硬砍为 Other
+    """
+    raw_tags = m.get("tags", [])
+    tag_names = []
+    if isinstance(raw_tags, list):
+        for t in raw_tags:
+            if isinstance(t, dict):
+                tag_names.append(str(t.get("label", "") or t.get("slug", "")).lower())
+            elif isinstance(t, str):
+                tag_names.append(t.lower())
+
+    if any(t in tag_names for t in ["politics", "elections", "government", "us politics", "geopolitics", "law", "policy", "fed"]):
+        return "Politics"
+    if any(t in tag_names for t in ["sports", "soccer", "football", "nba", "epl", "champion", "tennis", "basketball", "ballon d'or"]):
+        return "Sports"
+    if any(t in tag_names for t in ["crypto", "bitcoin", "ethereum", "solana", "defi", "nft", "btc", "eth"]):
+        return "Crypto"
+    if any(t in tag_names for t in ["business", "finance", "economy", "macro", "fed", "interest rates", "stocks"]):
+        return "Business"
+    if any(t in tag_names for t in ["pop culture", "entertainment", "gaming", "movies", "music"]):
+        return "Entertainment"
+
+    cat_str = str(m.get("category", "")).strip().capitalize()
+    if cat_str in ["Politics", "Sports", "Crypto", "Business", "Technology", "Economics", "Geopolitics", "Entertainment"]:
+        return cat_str
+
+    title_lower = m.get("question", "").lower()
+    if any(x in title_lower for x in ["bitcoin", "btc", "crypto", "eth", "solana", "blockchain", "defi", "token"]):
+        return "Crypto"
+    if any(x in title_lower for x in ["trump", "biden", "election", "president", "democrat", "republican", "congress", "senate", "law", "bill", "act", "xi jinping", "fed", "rate", "minister", "prime"]):
+        return "Politics"
+    if any(x in title_lower for x in ["world cup", "fifa", "soccer", "football", "nba", "nfl", "mlb", "tennis", "golf", "boxing", "epl", "champion", "ballon d'or", "league"]):
+        return "Sports"
+    if any(x in title_lower for x in ["gta", "album", "movie", "oscar", "grammy", "rihanna", "carti", "taylor", "beyonce", "kanye"]):
+        return "Entertainment"
+    if any(x in title_lower for x in ["war", "china", "russia", "iran", "ukraine", "taiwan", "israel", "nato", "military"]):
+        return "Geopolitics"
+    if any(x in title_lower for x in ["fed", "interest", "inflation", "gdp", "stock", "recession", "economy", "unemployment"]):
+        return "Economics"
+    if any(x in title_lower for x in ["ai", "artificial intelligence", "chatgpt", "openai", "google", "apple", "tech"]):
+        return "Technology"
+
+    return "Other"
+
+
+def fetch_active_markets(limit=150):
     """从 Gamma API 获取活跃市场，按流动性排序"""
     try:
         resp = requests.get(
@@ -176,7 +224,7 @@ def fetch_active_markets(limit=50):
                 "closed": "false",
                 "limit": limit,
                 "active": "true",
-                "order": "liquidityNum",
+                "order": "volume24hr",
                 "ascending": "false",
             },
             timeout=30,
@@ -232,142 +280,8 @@ def fetch_active_markets(limit=50):
             except Exception:
                 outcome_list = ["Yes", "No"]
 
-            # 检测市场分类（扩展分类）
-            title_lower = title.lower()
-            if any(
-                x in title_lower
-                for x in [
-                    "bitcoin",
-                    "btc",
-                    "crypto",
-                    "eth",
-                    "solana",
-                    "blockchain",
-                    "defi",
-                ]
-            ):
-                category = "Crypto"
-            elif any(
-                x in title_lower
-                for x in [
-                    "trump",
-                    "biden",
-                    "election",
-                    "president",
-                    "democrat",
-                    "republican",
-                    "newsom",
-                    "aoc",
-                    "congress",
-                    "senate",
-                ]
-            ):
-                category = "Politics"
-            elif any(
-                x in title_lower
-                for x in [
-                    "world cup",
-                    "fifa",
-                    "soccer",
-                    "football",
-                    "nba",
-                    "nfl",
-                    "mlb",
-                    "tennis",
-                    "golf",
-                    "boxing",
-                ]
-            ):
-                category = "Sports"
-            elif any(
-                x in title_lower
-                for x in [
-                    "gta",
-                    "album",
-                    "movie",
-                    "oscar",
-                    "grammy",
-                    "rihanna",
-                    "carti",
-                    "taylor",
-                    "beyonce",
-                    "kanye",
-                ]
-            ):
-                category = "Entertainment"
-            elif any(
-                x in title_lower
-                for x in [
-                    "war",
-                    "china",
-                    "russia",
-                    "iran",
-                    "ukraine",
-                    "taiwan",
-                    "israel",
-                    "nato",
-                    "military",
-                ]
-            ):
-                category = "Geopolitics"
-            elif any(
-                x in title_lower
-                for x in [
-                    "fed",
-                    "interest",
-                    "inflation",
-                    "gdp",
-                    "stock",
-                    "recession",
-                    "economy",
-                    "unemployment",
-                ]
-            ):
-                category = "Economics"
-            elif any(
-                x in title_lower
-                for x in [
-                    "ai",
-                    "artificial intelligence",
-                    "chatgpt",
-                    "openai",
-                    "google",
-                    "apple",
-                    "tech",
-                ]
-            ):
-                category = "Technology"
-            elif any(
-                x in title_lower
-                for x in [
-                    "climate",
-                    "weather",
-                    "hurricane",
-                    "earthquake",
-                    "flood",
-                    "temperature",
-                ]
-            ):
-                category = "Weather"
-            elif any(
-                x in title_lower
-                for x in ["space", "nasa", "spacex", "mars", "moon", "rocket"]
-            ):
-                category = "Science"
-            elif any(
-                x in title_lower
-                for x in [
-                    "health",
-                    "covid",
-                    "vaccine",
-                    "disease",
-                    "pandemic",
-                    "hospital",
-                ]
-            ):
-                category = "Health"
-            else:
-                category = "Other"
+            # 检测市场分类（优先使用 tags 原生标签解析）
+            category = parse_market_category(m)
 
             valid.append(
                 {
@@ -700,6 +614,19 @@ def main():
     except Exception as e:
         log_error("settlement", e, "结算同步失败（非致命）")
 
+    # 加载交易历史
+    trade_history = load_trade_history()
+
+    # === CTF 代币无损合并（1 YES + 1 NO -> 1 USDC 现金）===
+    try:
+        from ctf_merger import auto_merge_portfolio
+        merge_res = auto_merge_portfolio(trade_history, dry_run=DRY_RUN)
+        if merge_res.get("merged_count", 0) > 0:
+            log.info(f"✨ [CTF Merge] 已无损合并 {merge_res['merged_count']} 组对冲仓位，释放资金 ${merge_res['total_usdc_recovered']:.2f} USDC")
+            print(f"✨ [CTF Merge] 已无损合并 {merge_res['merged_count']} 组对冲仓位，释放资金 ${merge_res['total_usdc_recovered']:.2f} USDC")
+    except Exception as e:
+        log_error("ctf_merger", e, "CTF 代币合并执行失败（非致命）")
+
     # === 套利扫描（Dutch Book + negRisk）===
     try:
         arb_result = scan_all_arbitrage()
@@ -709,8 +636,8 @@ def main():
     except Exception as e:
         log_error("arbitrage", e, "套利扫描失败（非致命）")
 
-    # 1. 获取活跃市场（按流动性排序取前50，覆盖更多机会）
-    markets = fetch_active_markets(limit=50)
+    # 1. 获取活跃市场（按 24h 交易量排序取前 150，覆盖更多机会）
+    markets = fetch_active_markets(limit=150)
     if not markets:
         return  # 无市场，静默
 
@@ -832,6 +759,10 @@ def main():
     )
     print()
 
+    # === 🆕 动态市场状态机集成 (QUIET / TRENDING / EVENT / REDUCE_ONLY) ===
+    from market_regime import MarketRegimeManager, MarketRegime
+    regime_mgr = MarketRegimeManager()
+
     # === 🆕 自主决策引擎集成 ===
     # 初始化策略发现器和决策引擎
     strategy_discoverer = StrategyDiscoverer(TRADE_LOG)
@@ -901,7 +832,9 @@ def main():
     print()
     
     # === 市场环境检测（一次性，用于所有市场）===
-    regime_data = detect_market_regime(markets, TRADE_LOG)
+    # 使用排名靠前的第一个市场作为流动性基准检测，或传空字典
+    sample_market = markets[0] if markets else {}
+    regime_data = detect_market_regime(sample_market, llm_disagreement=0.0, current_exposure_pct=0.0)
     print(f"📊 市场环境:")
     print(format_regime_report(regime_data))
     print()
@@ -913,6 +846,9 @@ def main():
     liquidity_filtered = []      # 被流动性过滤的样本
     category_filtered = []       # 被类别过滤的类别名（诊断分布）
     disagreement_filtered = []   # 被分歧阈值过滤的实际分歧值（诊断分布）
+
+    debates_made = 0             # LLM 深度分析计数器
+    MAX_DEBATES_PER_RUN = 5      # 每轮最多深度分析 5 个标的，防止 429 熔断
 
     for market in markets:
         # 全局超时检查：超过 900 秒硬截断（15分钟）
@@ -1072,9 +1008,15 @@ def main():
             print(f"⚠️ 多平台信号分析失败: {e}")
 
         # 6. LLM 分析概率（使用高级投票系统，返回加权平均和投票详情）
+        if debates_made >= MAX_DEBATES_PER_RUN:
+            print(f"⏸️ 深度分析已达本轮上限 ({MAX_DEBATES_PER_RUN})，提前退出以保护 API 额度")
+            break
+
         llm_prob, model_results, vote_details = llm_analyze_probability(
             title, news_text, yes_price, category
         )
+        debates_made += 1
+
         if llm_prob is None:
             filter_stats['llm_failed'] += 1
             continue
