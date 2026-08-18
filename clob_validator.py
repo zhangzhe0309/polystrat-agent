@@ -123,6 +123,8 @@ def get_clob_orderbook(token_id, side="buy"):
             "spread_pct": spread_pct,
             "mid_price": mid_price,
             "depth_usd": depth_usd,
+            "raw_bids": bids,
+            "raw_asks": asks,
             "success": True,
             "error": "",
             "cached": False,
@@ -242,6 +244,133 @@ def validate_price_before_trade(market, intended_direction, intended_price, toke
         "original_price": intended_price,
         "price_slippage": price_slippage,
         "reason": f"价格校验通过 spread={spread_pct:.1%} slippage={price_slippage:+.2f}¢",
+    }
+
+
+def validate_sell_depth(token_id, sell_shares, min_acceptable_price=None, max_slippage_pct=0.10):
+    """
+    卖出/平仓前订单簿深度与滑点校验（防止在流动性真空期盲目砸盘）
+    
+    Args:
+        token_id: 合约 token ID
+        sell_shares: 拟卖出的份额数
+        min_acceptable_price: 最低可接受卖出价格（可选）
+        max_slippage_pct: 允许的最大加权滑点比例（默认 10%）
+        
+    Returns:
+        dict: {
+            "valid": bool,
+            "best_bid": float,
+            "weighted_bid_price": float,
+            "available_bid_shares": float,
+            "slippage_pct": float,
+            "reason": str,
+        }
+    """
+    config = SPREAD_CONFIG
+    if not config.get("enabled", True):
+        return {
+            "valid": True,
+            "best_bid": 0.0,
+            "weighted_bid_price": 0.0,
+            "available_bid_shares": sell_shares,
+            "slippage_pct": 0.0,
+            "reason": "校验未启用",
+        }
+        
+    if not token_id or sell_shares <= 0:
+        return {
+            "valid": False,
+            "best_bid": 0.0,
+            "weighted_bid_price": 0.0,
+            "available_bid_shares": 0.0,
+            "slippage_pct": 0.0,
+            "reason": "无效的 token_id 或 sell_shares",
+        }
+        
+    orderbook = get_clob_orderbook(token_id, side="sell")
+    if not orderbook.get("success"):
+        return {
+            "valid": True,
+            "best_bid": 0.0,
+            "weighted_bid_price": 0.0,
+            "available_bid_shares": sell_shares,
+            "slippage_pct": 0.0,
+            "reason": f"CLOB 查询失败({orderbook.get('error')})，保守放行",
+        }
+        
+    best_bid = orderbook.get("best_bid", 0.0)
+    raw_bids = orderbook.get("raw_bids", [])
+    
+    if best_bid <= 0 or not raw_bids:
+        return {
+            "valid": False,
+            "best_bid": 0.0,
+            "weighted_bid_price": 0.0,
+            "available_bid_shares": 0.0,
+            "slippage_pct": 1.0,
+            "reason": "买盘无挂单(Best Bid=0)，存在流动性真空",
+        }
+        
+    # 计算多档买盘深度与加权均价
+    sorted_bids = sorted(raw_bids, key=lambda x: float(x.get("price", 0)), reverse=True)
+    accum_shares = 0.0
+    accum_value = 0.0
+    
+    for b in sorted_bids:
+        p = float(b.get("price", 0))
+        s = float(b.get("size", 0))
+        if p <= 0 or s <= 0:
+            continue
+        needed = sell_shares - accum_shares
+        take = min(s, needed)
+        accum_shares += take
+        accum_value += take * p
+        if accum_shares >= sell_shares:
+            break
+            
+    total_depth_shares = sum(float(b.get("size", 0)) for b in sorted_bids if float(b.get("price", 0)) > 0)
+    weighted_price = (accum_value / accum_shares) if accum_shares > 0 else 0.0
+    slippage_pct = (best_bid - weighted_price) / best_bid if best_bid > 0 else 0.0
+    
+    # 深度不足判断
+    if accum_shares < sell_shares * 0.5:
+        return {
+            "valid": False,
+            "best_bid": best_bid,
+            "weighted_bid_price": weighted_price,
+            "available_bid_shares": total_depth_shares,
+            "slippage_pct": slippage_pct,
+            "reason": f"买盘深度不足: 仅可承接 {accum_shares:.1f}/{sell_shares:.1f} 份额",
+        }
+        
+    if slippage_pct > max_slippage_pct:
+        return {
+            "valid": False,
+            "best_bid": best_bid,
+            "weighted_bid_price": weighted_price,
+            "available_bid_shares": total_depth_shares,
+            "slippage_pct": slippage_pct,
+            "reason": f"平仓加权滑点过大: {slippage_pct:.1%} > {max_slippage_pct:.1%}",
+        }
+        
+    if min_acceptable_price and weighted_price < min_acceptable_price:
+        return {
+            "valid": False,
+            "best_bid": best_bid,
+            "weighted_bid_price": weighted_price,
+            "available_bid_shares": total_depth_shares,
+            "slippage_pct": slippage_pct,
+            "reason": f"加权均价 ${weighted_price:.4f} 低于最低限制 ${min_acceptable_price:.4f}",
+        }
+        
+    return {
+        "valid": True,
+        "best_bid": best_bid,
+        "weighted_bid_price": weighted_price,
+        "available_bid_shares": total_depth_shares,
+        "slippage_pct": slippage_pct,
+        "reason": f"深度充足, 加权均价 ${weighted_price:.4f} (滑点 {slippage_pct:.1%})",
     }
 
 

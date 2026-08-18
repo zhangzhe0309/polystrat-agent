@@ -51,7 +51,7 @@ PROVIDERS = {
         "base_url": "https://api.groq.com/openai/v1",
         "model": "llama-3.3-70b-versatile",
         "key_env": "GROQ_API_KEY",
-        "timeout": (5, 30),
+        "timeout": (2, 5),
         "max_tokens": 2000,
         "rpm_limit": 30,  # Groq free tier ~30 RPM
     },
@@ -60,7 +60,7 @@ PROVIDERS = {
         "base_url": "https://apihub.agnes-ai.com/v1",
         "model": "agnes-2.5-flash",
         "key_env": "AGNES_API_KEY",
-        "timeout": (5, 60),
+        "timeout": (3, 15),
         "max_tokens": 2000,
         "rpm_limit": 60,
         "note": "agnes-2.5-flash 速度极快，适合承担核心推理节点",
@@ -70,7 +70,7 @@ PROVIDERS = {
         "base_url": "http://localhost:3404/v1",
         "model": "gemini-3.1-pro-low",
         "key_env": "GEMINI_DUMMY",
-        "timeout": (5, 30),
+        "timeout": (2, 5),
         "max_tokens": 2000,
         "rpm_limit": 60,
     },
@@ -79,7 +79,7 @@ PROVIDERS = {
         "base_url": "https://integrate.api.nvidia.com/v1",
         "model": "deepseek-ai/deepseek-v4-flash",
         "key_env": "NVIDIA_API_KEY_2",
-        "timeout": (5, 30),
+        "timeout": (2, 5),
         "max_tokens": 2000,
         "rpm_limit": 40,
     },
@@ -88,7 +88,7 @@ PROVIDERS = {
         "base_url": "https://openrouter.ai/api/v1",
         "model": "meta-llama/llama-3.3-70b-instruct",
         "key_env": "OPENROUTER_API_KEY",
-        "timeout": (5, 30),
+        "timeout": (3, 20),
         "max_tokens": 2000,
         "rpm_limit": 20,
     },
@@ -97,7 +97,7 @@ PROVIDERS = {
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
         "model": "glm-5.1",
         "key_env": "GLM_API_KEY",
-        "timeout": (5, 45),
+        "timeout": (3, 15),
         "max_tokens": 2000,
         "rpm_limit": 60,
     },
@@ -110,9 +110,9 @@ PROVIDERS = {
 #   - Bear: NVIDIA(DeepSeek) → Gemini → AGNES → Groq → OpenRouter → GLM
 #   - Judge: Groq(Llama) → Gemini → AGNES → NVIDIA → OpenRouter → GLM
 ROLE_PROVIDERS = {
-    "bull": ["gemini", "agnes", "groq", "nvidia", "openrouter", "glm"],
-    "bear": ["nvidia", "gemini", "agnes", "groq", "openrouter", "glm"],
-    "judge": ["groq", "gemini", "agnes", "nvidia", "openrouter", "glm"],
+    "bull": ["agnes", "openrouter", "groq", "gemini"],
+    "bear": ["openrouter", "agnes", "groq", "gemini"],
+    "judge": ["groq", "agnes", "openrouter", "gemini"],
 }
 
 # === 429 ���试配置 ===

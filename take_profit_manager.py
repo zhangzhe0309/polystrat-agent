@@ -193,6 +193,9 @@ class TakeProfitManager:
         exit_signals = []
         
         for pos_id, position in list(self.positions.items()):
+            if position.remaining_pct <= 0.01:
+                continue
+
             # 查找当前价格
             current_price = current_prices.get(pos_id) or current_prices.get(position.token_id)
             if not current_price or current_price <= 0:
@@ -212,23 +215,20 @@ class TakeProfitManager:
                 
                 trigger_price = position.entry_price * (1 + step["trigger_pct"])
                 if current_price >= trigger_price:
+                    exit_pct = step["exit_pct"] * position.remaining_pct
+                    shares_to_sell = position.shares * exit_pct
                     signal = ExitSignal(
                         position_id=pos_id,
                         stage=step["stage"],
-                        exit_pct=step["exit_pct"] * position.remaining_pct,
+                        exit_pct=exit_pct,
                         exit_price=current_price,
-                        exit_size_usdc=position.size_usdc * step["exit_pct"] * position.remaining_pct,
-                        pnl_usd=self._calculate_pnl(position, current_price, step["exit_pct"] * position.remaining_pct),
+                        exit_size_usdc=position.size_usdc * exit_pct,
+                        pnl_usd=self._calculate_pnl(position, current_price, exit_pct),
                         reason=f"{step['description']} @ ${current_price:.4f}",
                         urgency="high" if step["trigger_pct"] >= 0.25 else "medium",
                     )
                     exit_signals.append(signal)
-                    
-                    # 更新状态
-                    position.remaining_pct -= step["exit_pct"] * position.remaining_pct
-                    position.tp_stage = i + 1
-                    if step["stage"] == "TP1":
-                        position.tp1_triggered = True
+                    # 注意：不在此处直接扣减 remaining_pct 或 archive，等待 confirm_exit_fill 成交回报确认
             
             # 检查止损
             loss_pct = (current_price - position.entry_price) / position.entry_price
@@ -244,7 +244,6 @@ class TakeProfitManager:
                     urgency="high",
                 )
                 exit_signals.append(signal)
-                position.remaining_pct = 0
             
             # 追踪止损 (TP1 后激活)
             elif position.tp1_triggered and position.highest_price > position.entry_price:
@@ -261,7 +260,6 @@ class TakeProfitManager:
                         urgency="high",
                     )
                     exit_signals.append(signal)
-                    position.remaining_pct = 0
             
             # 时间止损
             if position.hours_held > MAX_HOLD_HOURS and position.remaining_pct > 0:
@@ -276,17 +274,81 @@ class TakeProfitManager:
                     urgency="medium",
                 )
                 exit_signals.append(signal)
-                position.remaining_pct = 0
-        
-        # 清理已完全退出的仓位
-        closed = [pid for pid, pos in self.positions.items() if pos.remaining_pct <= 0.01]
-        for pid in closed:
-            self._archive_position(pid)
-        
-        if exit_signals:
-            self._save_state()
         
         return exit_signals
+
+    def confirm_exit_fill(
+        self,
+        position_id: str,
+        stage: str,
+        fill_shares: float,
+        fill_price: float,
+        fee_usd: float = 0.0,
+    ) -> dict:
+        """
+        两阶段状态机：收到真实成交回报后确认平仓并结算 PnL
+        
+        Args:
+            position_id: 仓位 ID
+            stage: 平仓阶段 (TP1, TP2, STOP_LOSS 等)
+            fill_shares: 实际成交份额
+            fill_price: 实际成交均价
+            fee_usd: 手续费
+            
+        Returns:
+            dict: 成交结算明细
+        """
+        position = self.positions.get(position_id)
+        if not position:
+            return {"success": False, "reason": f"未找到仓位 {position_id}"}
+            
+        if fill_shares <= 0:
+            return {"success": False, "reason": "成交份额必须大于0"}
+            
+        # 实际成交 PnL 计算
+        cost = fill_shares * position.entry_price
+        revenue = fill_shares * fill_price
+        realized_pnl = revenue - cost - fee_usd
+        
+        exit_pct = fill_shares / position.shares if position.shares > 0 else 1.0
+        position.remaining_pct = max(0.0, position.remaining_pct - exit_pct)
+        
+        if stage.startswith("TP"):
+            try:
+                stage_num = int(stage.replace("TP", ""))
+                position.tp_stage = max(position.tp_stage, stage_num)
+                if stage == "TP1":
+                    position.tp1_triggered = True
+            except ValueError:
+                pass
+                
+        # 记录已实现记录
+        exit_record = {
+            "position_id": position_id,
+            "stage": stage,
+            "fill_shares": fill_shares,
+            "fill_price": fill_price,
+            "cost_usd": cost,
+            "revenue_usd": revenue,
+            "fee_usd": fee_usd,
+            "realized_pnl": realized_pnl,
+            "remaining_pct": position.remaining_pct,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        self.exit_history.append(exit_record)
+        
+        # 如果仓位结清，归档仓位
+        if position.remaining_pct <= 0.01:
+            self._archive_position(position_id)
+            
+        self._save_state()
+        
+        return {
+            "success": True,
+            "realized_pnl": realized_pnl,
+            "remaining_pct": position.remaining_pct if position_id in self.positions else 0.0,
+            "record": exit_record,
+        }
     
     def handle_whale_exit(self, source_wallet: str, token_id: str, current_price: float) -> List[ExitSignal]:
         """
@@ -359,16 +421,19 @@ class TakeProfitManager:
         """归档已关闭的仓位"""
         position = self.positions.pop(position_id, None)
         if position:
-            self.exit_history.append({
-                "position_id": position_id,
-                "market": position.market_question[:80],
-                "entry_price": position.entry_price,
-                "size_usdc": position.size_usdc,
-                "tp_stage_reached": position.tp_stage,
-                "whale_exit": position.whale_exit_detected,
-                "hours_held": position.hours_held,
-                "closed_at": datetime.now(timezone.utc).isoformat(),
-            })
+            # 仅在 exit_history 中没有该仓位记录时作为 fallback 记录
+            has_record = any(rec.get("position_id") == position_id for rec in self.exit_history)
+            if not has_record:
+                self.exit_history.append({
+                    "position_id": position_id,
+                    "market": position.market_question[:80],
+                    "entry_price": position.entry_price,
+                    "size_usdc": position.size_usdc,
+                    "tp_stage_reached": position.tp_stage,
+                    "whale_exit": position.whale_exit_detected,
+                    "hours_held": position.hours_held,
+                    "closed_at": datetime.now(timezone.utc).isoformat(),
+                })
             # 保留最近 1000 条
             if len(self.exit_history) > 1000:
                 self.exit_history = self.exit_history[-1000:]

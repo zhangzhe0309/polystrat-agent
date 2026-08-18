@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 # 添加项目路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from debate_engine import DebateEngine, run_debate_for_market, _get_groq_key
+from debate_engine import DebateEngine, run_debate_for_market, _get_api_key
 from polystrat_logger import log
 
 
@@ -99,7 +99,7 @@ def test_real_debate():
     engine = DebateEngine()
     
     # 确保 Groq key 可用
-    if not _get_groq_key():
+    if not _get_api_key("groq"):
         from dotenv import load_dotenv
         from pathlib import Path
         load_dotenv(Path.home() / ".hermes" / "profiles" / "life" / ".env")

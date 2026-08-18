@@ -798,12 +798,29 @@ def main():
                         continue
                     sell_shares = pos.shares * ex.exit_pct
                     try:
-                        sell_result = place_order(pos.token_id, "SELL", round(sell_shares, 2), ex.exit_price)
+                        # 借鉴经验: 卖出前进行盘口深度与加权滑点前置校验
+                        from clob_validator import validate_sell_depth
+                        depth_check = validate_sell_depth(pos.token_id, sell_shares, max_slippage_pct=0.15)
+                        if not depth_check["valid"]:
+                            log.warning(f"⚠️ 平仓跳过(盘口深度/滑点拦截): {pos.market_question[:30]} | {depth_check['reason']}")
+                            continue
+                            
+                        actual_sell_price = depth_check.get("weighted_bid_price") or ex.exit_price
+                        sell_result = place_order(pos.token_id, "SELL", round(sell_shares, 2), actual_sell_price)
                         sell_status = (sell_result or {}).get("status", "")
-                        # 只有真正成交(DRY_RUN/SUCCESS)才记账+释放额度;失败时回滚仓位等下次重试
+                        
+                        # 阶段二: 两阶段状态机确认成交回报
                         if sell_status in ("SUCCESS", "DRY_RUN"):
+                            fill_detail = tp_manager.confirm_exit_fill(
+                                position_id=ex.position_id,
+                                stage=ex.stage,
+                                fill_shares=sell_shares,
+                                fill_price=actual_sell_price,
+                                fee_usd=0.0
+                            )
+                            realized_pnl = fill_detail.get("realized_pnl", ex.pnl_usd)
                             try:
-                                record_trade_result(ex.pnl_usd)
+                                record_trade_result(realized_pnl)
                             except Exception:
                                 pass
                             try:
@@ -811,15 +828,11 @@ def main():
                                 record_close(ex.exit_size_usdc)
                             except Exception:
                                 pass
-                            print(f"   💸 TP平仓: {pos.market_question[:40]} | {ex.stage} | 退出{ex.exit_pct:.0%} @ {ex.exit_price:.2f} | PnL ${ex.pnl_usd:+.2f}")
+                            print(f"   💸 平仓成交({sell_status}): {pos.market_question[:40]} | {ex.stage} | 退出{ex.exit_pct:.0%} @ {actual_sell_price:.4f} | PnL ${realized_pnl:+.2f}")
                         else:
-                            # SELL 未成交:回滚 remaining_pct,避免仓位脱离 TP 管理 + 额度被误释放
-                            pos.remaining_pct = min(1.0, pos.remaining_pct + ex.exit_pct)
-                            log.warning(f"⚠️ TP平仓未成交({sell_status}): {pos.market_question[:40]} | {ex.stage} | 仓位保留 remaining={pos.remaining_pct:.0%} | {(sell_result or {}).get('message', '')}")
+                            log.warning(f"⚠️ 平仓未成交({sell_status}): {pos.market_question[:40]} | {ex.stage} | 保持原仓位 | {(sell_result or {}).get('message', '')}")
                     except Exception as sell_err:
-                        # 下单异常:同样回滚仓位,保留风控管理
-                        pos.remaining_pct = min(1.0, pos.remaining_pct + ex.exit_pct)
-                        log.warning(f"TP平仓下单异常,仓位保留: {sell_err}")
+                        log.warning(f"平仓下单异常, 保持原仓位: {sell_err}")
                 tp_manager._save_state()
     except Exception as tp_mon_err:
         log.warning(f"止盈监控失败: {tp_mon_err}")
@@ -851,10 +864,10 @@ def main():
     MAX_DEBATES_PER_RUN = 5      # 每轮最多深度分析 5 个标的，防止 429 熔断
 
     for market in markets:
-        # 全局超时检查：超过 900 秒硬截断（15分钟）
+        # 全局超时检查：超过 220 秒硬截断（15分钟）
         elapsed = _time.time() - start_time
-        if elapsed >= 900:
-            print(f"⏰ 全局超时 {elapsed:.0f}s >= 900s，中断后续市场扫描")
+        if elapsed >= 220:
+            print(f"⏰ 全局超时 {elapsed:.0f}s >= 220s，中断后续市场扫描")
             log.warning(f"全局超时 {elapsed:.0f}s，仅处理了 {len(decisions)}/{len(markets)} 个市场")
             break
 
@@ -1423,14 +1436,18 @@ def main():
                 liquidity_factor = max(0.3, liquidity / 10000)
 
             # 最终仓位 = min(Kelly × 流动性调整 × 波动率缩放, 硬上限)
-            position_size = min(
-                kelly_position * liquidity_factor * vol_scale,
-                balance * 0.05,
-                LIMITS_CONFIG["max_single_trade"],
-            )
+            if DRY_RUN:
+                position_size = 10.0  # 模拟模式：固定仓位，排除仓位控制对收益率计算的干扰
+            else:
+                position_size = min(
+                    kelly_position * liquidity_factor * vol_scale,
+                    balance * 0.05,
+                    LIMITS_CONFIG["max_single_trade"],
+                )
+            
             # Polymarket 最小下单量 $0.50，若 Kelly 建议低于此值则跳过（边缘优势不足）
             MIN_ORDER = 0.50
-            if position_size < MIN_ORDER:
+            if not DRY_RUN and position_size < MIN_ORDER:
                 log.warning(
                     f"Kelly仓位 ${position_size:.2f} 低于最小下单额 ${MIN_ORDER}，跳过"
                 )

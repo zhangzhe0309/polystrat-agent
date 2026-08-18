@@ -15,12 +15,12 @@ from polystrat_logger import log, log_error
 
 # 限额配置
 LIMITS_CONFIG = {
-    "max_single_trade": 50.0,        # 🔧 模拟盘放宽: 单笔最大50U（5% of $1000，与 MAX_POSITION_SIZE 一致）
-    "max_daily_trades": 10,          # 每日最大交易次数
-    "max_daily_volume": 500.0,       # 🔧 模拟盘放宽: 每日最大交易量500U
-    "max_total_exposure": 500.0,     # 🔧 模拟盘放宽: 最大总仓位500U
+    "max_single_trade": 9999.0,        # 模拟模式放开
+    "max_daily_trades": 9999,          # 模拟模式放开
+    "max_daily_volume": 99999.0,       # 模拟模式放开
+    "max_total_exposure": 99999.0,     # 模拟模式放开
     "min_balance_required": 10.0,    # 最低余额要求
-    "max_position_pct": 0.25,        # 🔧 累计仓位上限25%（与 risk_management.MAX_TOTAL_POSITION 一致，原5%过严导致$195仓位触顶）
+    "max_position_pct": 100.0,        # 模拟模式放开累计仓位限制
 }
 
 # 状态文件

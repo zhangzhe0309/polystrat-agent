@@ -38,5 +38,9 @@ Thumbs.db
 .venv/
 
 *.stackdump
+*.db
+*.bak
+tmp_*.py
+
 venv/
 .venv/

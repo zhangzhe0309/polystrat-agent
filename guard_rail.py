@@ -44,13 +44,17 @@ GUARDRAIL_CONFIG = {
         "max_category_exposure_pct": 0.30,  # 单类别最大占比30%
         # 事件关键词分组（同一组=同一事件）
         "event_groups": [
-            ["world cup", "fifa", "世界杯"],
-            ["election", "president", "选举", "总统"],
-            ["bitcoin", "btc", "比特币"],
-            ["ethereum", "eth", "以太坊"],
-            ["interest rate", "fed", "利率", "美联储"],
-            ["oil price", "crude", "油价", "原油"],
-            ["copper", "铜价"],
+            ["world cup", "fifa", "世界杯", "uefa", "champions league"],
+            ["election", "president", "选举", "总统", "senate", "house of rep", "white house"],
+            ["bitcoin", "btc", "比特币", "halving"],
+            ["ethereum", "eth", "以太坊", "vitalik"],
+            ["solana", "sol"],
+            ["crypto", "cryptocurrency", "sec", "etf", "binance", "coinbase"],
+            ["interest rate", "fed", "利率", "美联储", "fomc", "powell", "cpi", "inflation", "通胀"],
+            ["oil price", "crude", "油价", "原油", "opec"],
+            ["copper", "铜价", "metal", "gold", "黄金"],
+            ["geopolitics", "war", "conflict", "ukraine", "russia", "israel", "iran", "taiwan", "地缘"],
+            ["tariff", "trade war", "关税", "trade"],
         ],
     },
     # 波动率过滤

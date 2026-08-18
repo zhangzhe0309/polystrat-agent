@@ -14,11 +14,11 @@ from safe_file_ops import atomic_read_json
 from polystrat_logger import log
 
 # 配置
-STOP_LOSS_THRESHOLD = 0.10  # 最大累计回撤10%（正数，与 drawdown_pct 比较）
-MAX_POSITION_SIZE = 0.05  # 单笔最大5%资金
-MAX_TOTAL_POSITION = 0.25  # 总仓位最大25%（与止损敞口阈值一致）
-MAX_SAME_CATEGORY = 0.20  # 同一类别最大20%
-MAX_SAME_MARKET = 0.10  # 同一市场最大10%
+STOP_LOSS_THRESHOLD = 100.0  # 最大累计回撤100%（模拟模式放开止损）
+MAX_POSITION_SIZE = 1.0
+MAX_TOTAL_POSITION = 100.0
+MAX_SAME_CATEGORY = 100.0
+MAX_SAME_MARKET = 100.0
 
 # 交易记录文件
 TRADE_LOG = (
@@ -37,16 +37,18 @@ def load_trade_history():
     return atomic_read_json(TRADE_LOG, default=[])
 
 
-def calculate_position_size(balance, confidence, market_category=None):
+def calculate_position_size(balance, confidence, market_category=None, entry_price=None):
     """
     计算仓位大小
 
     使用事务性读取，只加载一次交易历史，保证数据一致性
+    增加针对高胜率/高价合约（捡钢镚）的非对称赔率缩减与专项敞口控制
 
     Args:
         balance: 账户余额
         confidence: 置信度 (0-1)
         market_category: 市场类别
+        entry_price: 预期买入价格 (0.01 - 0.99)
 
     Returns:
         float: 建议仓位大小
@@ -57,8 +59,29 @@ def calculate_position_size(balance, confidence, market_category=None):
     # 根据置信度调整
     confidence_adjusted = base_position * confidence
 
+    # 高价合约（捡钢镚区）非对称赔率风控缩减
+    if entry_price and entry_price >= 0.75:
+        # 当价格 >= 0.75 时，潜在盈亏比严重不对称，进行渐进式仓位压制
+        # 0.75 -> 1.0x, 0.85 -> 0.6x, 0.90 -> 0.4x, 0.95 -> 0.2x
+        odds_scale = max(0.2, (1.0 - entry_price) / 0.25)
+        confidence_adjusted *= odds_scale
+
     # 只加载一次交易历史，保证数据一致性
     trades = load_trade_history()
+
+    # 高价合约专项累计敞口限制 (不超过总资金 10%)
+    if entry_price and entry_price >= 0.80:
+        high_price_exposure = sum(
+            t.get("amount", 0)
+            for t in trades
+            if t.get("result") in ("pending", "", None) and float(t.get("market_price", 0)) >= 0.80
+        )
+        max_high_price_exposure = balance * 0.10
+        if high_price_exposure >= max_high_price_exposure:
+            log.warning(f"高价合约(>=0.80)总敞口已达上限 ({high_price_exposure:.2f}/{max_high_price_exposure:.2f})")
+            return 0
+        remaining_high_price = max_high_price_exposure - high_price_exposure
+        confidence_adjusted = min(confidence_adjusted, remaining_high_price)
 
     # 检查同类别限制
     if market_category:
@@ -159,7 +182,7 @@ def check_stop_loss(balance=None, trade_history=None):
     # 检查2: 未结算敞口过大（防止在结算前过度暴露）
     # Polymarket 结算可能需要数小时到数周，期间资金被锁定
     pending_exposure_pct = pending_exposure / balance if balance > 0 else 0
-    if pending_exposure_pct > 0.25:
+    if pending_exposure_pct > 100.0:  # 模拟模式放开未结算敞口限制
         print(
             f"🚨 止损触发: 未结算敞口 {pending_exposure_pct:.2%} > 25% "
             f"({pending_count} 笔待结算, 敞口 ${pending_exposure:.2f})"

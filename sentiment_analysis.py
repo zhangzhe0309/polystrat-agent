@@ -51,6 +51,11 @@ class TTLCache:
                 self._cache.popitem(last=False)  # 移除最旧
             self._cache[key] = (value, time.time())
     
+    def clear(self):
+        """清空缓存"""
+        with self._lock:
+            self._cache.clear()
+
     def clear_expired(self):
         """清理过期项"""
         with self._lock:
