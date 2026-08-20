@@ -51,8 +51,7 @@ def check_market_batch(condition_ids):
         return results
 
     try:
-        # Gamma API 支持批量查询
-        # 但为了稳定性，我们分批处理
+        # Gamma API 查询市场状态（使用 condition_ids 参数）
         batch_size = 10
 
         for i in range(0, len(condition_ids), batch_size):
@@ -61,16 +60,28 @@ def check_market_batch(condition_ids):
             for cid in batch:
                 try:
                     resp = requests.get(
-                        f"{GAMMA_API}/markets", params={"conditionId": cid}, timeout=10
+                        f"{GAMMA_API}/markets", params={"condition_ids": cid}, timeout=10
                     )
 
                     if resp.status_code == 200:
                         markets = resp.json()
                         if markets:
                             market = markets[0]
-                            resolved = market.get("resolved", False)
-
-                            if resolved:
+                            closed = market.get("closed", False)
+                            resolved = market.get("resolved", False) or closed
+                            
+                            # 1. 检查 tokens 中的 winner 标记
+                            settled = False
+                            outcome = None
+                            tokens = market.get("tokens", [])
+                            for tok in tokens:
+                                if tok.get("winner") is True or tok.get("price") == 1.0 or tok.get("price") == 1:
+                                    settled = True
+                                    outcome = tok.get("outcome", "Yes")
+                                    break
+                            
+                            # 2. 检查 outcomePrices 价格收敛
+                            if not settled:
                                 outcome_prices = market.get("outcomePrices", "")
                                 if isinstance(outcome_prices, str):
                                     try:
@@ -81,26 +92,31 @@ def check_market_batch(condition_ids):
                                     prices = outcome_prices
 
                                 if prices and len(prices) >= 2:
-                                    yes_price = float(prices[0])
-                                    if yes_price >= 0.95:
-                                        results[cid] = {
-                                            "settled": True,
-                                            "outcome": "Yes",
-                                        }
-                                    elif yes_price <= 0.05:
-                                        results[cid] = {
-                                            "settled": True,
-                                            "outcome": "No",
-                                        }
-                                    else:
-                                        results[cid] = {
-                                            "settled": False,
-                                            "outcome": None,
-                                        }
-                                else:
-                                    results[cid] = {"settled": False, "outcome": None}
+                                    try:
+                                        yes_price = float(prices[0])
+                                        no_price = float(prices[1])
+                                        if yes_price >= 0.95:
+                                            settled = True
+                                            outcome = "Yes"
+                                        elif yes_price <= 0.05 or no_price >= 0.95:
+                                            settled = True
+                                            outcome = "No"
+                                        elif (closed or resolved) and yes_price != no_price:
+                                            settled = True
+                                            outcome = "Yes" if yes_price > no_price else "No"
+                                    except (ValueError, TypeError):
+                                        pass
+
+                            if settled and outcome:
+                                results[cid] = {
+                                    "settled": True,
+                                    "outcome": outcome,
+                                }
                             else:
-                                results[cid] = {"settled": False, "outcome": None}
+                                results[cid] = {
+                                    "settled": False,
+                                    "outcome": None,
+                                }
                         else:
                             results[cid] = {"settled": False, "outcome": None}
                     else:
@@ -235,6 +251,7 @@ def update_settled_trades():
         "losses": 0,
         "total_pnl": 0,
         "timeout": 0,
+        "settled_items": [],
     }
 
     # 1. 先检查超时交易
@@ -309,6 +326,17 @@ def update_settled_trades():
 
                 market = trade.get("market", "")[:40]
                 direction = trade.get("direction", "")
+                
+                stats["settled_items"].append({
+                    "market": trade.get("market", ""),
+                    "direction": direction,
+                    "market_outcome": settlement["outcome"],
+                    "result": result,
+                    "pnl": pnl,
+                    "amount": trade.get("amount", 0),
+                    "market_price": trade.get("market_price", 0.5),
+                })
+                
                 log.info(
                     f"结算: {market} | {direction} vs {settlement['outcome']} = {result} | PnL: {pnl:+.2f}"
                 )
@@ -364,6 +392,23 @@ def get_settlement_summary():
         "avg_lose": avg_lose,
         "profit_factor": abs(avg_win / avg_lose) if avg_lose != 0 else 0,
     }
+
+
+def format_recent_settlement_report(stats):
+    """格式化本轮新结算回报"""
+    items = stats.get("settled_items", [])
+    if not items and stats.get("timeout", 0) == 0:
+        return ""
+    lines = []
+    lines.append(f"🎯 【订单结算回报】本轮共结算 {len(items)} 笔（{stats.get('wins', 0)}胜/{stats.get('losses', 0)}负，当轮 PnL: {stats.get('total_pnl', 0):+.2f} USDC）")
+    for item in items:
+        res_str = "盈利 (胜)" if item["result"] == "win" else "亏损 (负)"
+        pnl_str = f"{item['pnl']:+.2f}"
+        lines.append(f"  • 标的: {item['market']}")
+        lines.append(f"    - 下单方向: {item['direction']} | 结算结果: {item['market_outcome']} | 状态: {res_str} ({pnl_str} USDC)")
+    if stats.get("timeout", 0) > 0:
+        lines.append(f"  • 超时自动归档: {stats['timeout']} 笔")
+    return "\n".join(lines)
 
 
 def format_settlement_report():

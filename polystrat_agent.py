@@ -53,6 +53,7 @@ from trade_limits import (
 from settlement_tracker import (
     update_settled_trades,
     format_settlement_report as fmt_settlement_report,
+    format_recent_settlement_report,
 )
 from settlement_tracker import set_trade_log_path as set_settlement_log_path
 from market_microstructure import calculate_microstructure_signal, format_microstructure_report
@@ -604,6 +605,7 @@ def main():
     log.info("PolyStrat 启动")
 
     # === 结算同步（先更新交易结果，让 ML 学习有目标变量）===
+    settle_stats = {}
     try:
         set_settlement_log_path(TRADE_LOG)
         settle_stats = update_settled_trades()
@@ -611,6 +613,9 @@ def main():
             log.info(
                 f"结算同步: {settle_stats['wins']}胜/{settle_stats['losses']}负, PnL {settle_stats.get('total_pnl', 0):+.2f}"
             )
+            recent_settle_rep = format_recent_settlement_report(settle_stats)
+            if recent_settle_rep:
+                print(f"\n{recent_settle_rep}\n")
     except Exception as e:
         log_error("settlement", e, "结算同步失败（非致命）")
 
