@@ -441,13 +441,26 @@ class TestLLMSentimentAnalysis(unittest.TestCase):
         self.assertGreater(result["overall_score"], 0)
 
     def test_jev_system1_sentiment_integration(self):
-        """⚡ Jev System 1 情绪打分集成测试"""
+        """⚡ Jev System 1 情绪打分集成测试（mock 传输层，零网络）"""
+        import jev_client
         from sentiment_analysis import analyze_sentiment_jev
-        res = analyze_sentiment_jev("Massive breakthrough confirmed, market strongly rallying.", "Tech Market")
+        from unittest.mock import MagicMock
+        jev_client.reset()  # 隔离全局熔断状态（同进程其他用例可能已触发熔断）
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "answers": {
+                "sentiment": {"score": 4, "confidence": 0.9},
+                "is_material": {"noul": 0.8},
+            }
+        }
+        with patch("jev_client.requests.post", return_value=mock_resp), \
+                patch.dict(os.environ, {"TYPESAFE_API_KEY": "test_key"}):
+            res = analyze_sentiment_jev("Massive breakthrough confirmed, market strongly rallying.", "Tech Market")
         self.assertIn("score", res)
         self.assertIn("confidence", res)
-        self.assertGreaterEqual(res["score"], -1.0)
-        self.assertLessEqual(res["score"], 1.0)
+        self.assertEqual(res["score"], 1.0)
+        self.assertEqual(res["source"], "jev")
 
 
 class TestFileLock(unittest.TestCase):

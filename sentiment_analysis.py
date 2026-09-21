@@ -21,25 +21,8 @@ LLM_MODEL = os.environ.get("SENTIMENT_LLM_MODEL", "qwen/qwen3.5-397b-a17b")
 LLM_FALLBACK_MODEL = os.environ.get("SENTIMENT_LLM_FALLBACK", "meta/llama-3.3-70b-instruct")
 LLM_TEMPERATURE = float(os.environ.get("SENTIMENT_LLM_TEMPERATURE", "0.3"))
 
-# Jev System 1 快速情绪分析配置
-JEV_API_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
-JEV_MODEL = "jev-latest"
-JEV_TIMEOUT_SECONDS = 3.0
-
-def _get_typesafe_key():
-    k = os.environ.get("TYPESAFE_API_KEY", "")
-    if not k and os.path.exists("/root/.hermes/.env"):
-        try:
-            with open("/root/.hermes/.env", "r", encoding="utf-8") as f:
-                for line in f:
-                    if line.startswith("TYPESAFE_API_KEY="):
-                        k = line.strip().split("=", 1)[1]
-                        break
-        except Exception:
-            pass
-    return k
-
-TYPESAFE_API_KEY = _get_typesafe_key()
+# Jev System 1 统一走 jev_client（key 管理/熔断/统计收口在那里）
+from jev_client import jev_ask, JevUnavailableError
 
 # 情感分析结果缓存（LRU + TTL）
 class TTLCache:
@@ -134,18 +117,15 @@ def _truncate_text(text, max_len=500):
 
 def analyze_sentiment_jev(text, market_context=""):
     """
-    使用 TypeSafe AI Jev (System 1 快反射模型) 进行极速强类型情感打分。
-    特性：
-    1. Score 原语打分，原生返回连续浮点分数和置信度，彻底告别脆弱的 JSON 正则解析。
-    2. Noul 原语评估实质性 (is_material)。
-    3. 响应延迟仅 100ms~300ms，超时 3.0 秒硬熔断。
+    使用 Jev (System 1 快反射模型) 进行极速强类型情感打分。
+    传输/key/熔断统一由 jev_client 负责；本函数只做语义解析与归一化。
+    失败时 source 标签：
+      - "jev_failed"（http_error/bad_response）：远端应答异常
+      - "jev_error"（no_key/circuit_open/network）：本地未就绪或网络不可达，
+        调用方据此降级到 simple/LLM 兜底
     """
     if not isinstance(text, str) or not text.strip():
         return {"score": 0, "label": "neutral", "confidence": 0, "keywords": [], "explanation": "无效输入", "source": "jev"}
-
-    api_key = TYPESAFE_API_KEY or _get_typesafe_key()
-    if not api_key:
-        return {"score": 0, "label": "neutral", "confidence": 0, "keywords": [], "explanation": "未配置 Jev Key", "source": "jev"}
 
     cache_key = hashlib.md5(f"jev||{text}||{market_context}".encode('utf-8')).hexdigest()
     cached = _sentiment_cache.get(cache_key)
@@ -155,75 +135,64 @@ def analyze_sentiment_jev(text, market_context=""):
     truncated_text = _truncate_text(text, 600)
     state = f"Market: {market_context}\nNews: {truncated_text}" if market_context else f"News: {truncated_text}"
 
-    payload = {
-        "model": JEV_MODEL,
-        "state": state,
-        "questions": {
-            "sentiment": {
-                "type": "score",
-                "instructions": "Evaluate the directional sentiment towards the predicted event happening (0: strongly bearish/unlikely, 1: somewhat bearish, 2: neutral/mixed, 3: somewhat bullish, 4: strongly bullish/likely)",
-                "criteria": [
-                    "Strongly bearish / highly unlikely or negative outcome",
-                    "Somewhat bearish / leaning negative or lower odds",
-                    "Neutral / mixed / no clear directional impact",
-                    "Somewhat bullish / leaning positive or higher odds",
-                    "Strongly bullish / highly likely or positive outcome confirmed"
-                ]
-            },
-            "is_material": {
-                "type": "noul",
-                "instructions": "Does this news contain material, concrete factual information directly relevant to resolving the prediction market?"
-            }
+    questions = {
+        "sentiment": {
+            "type": "score",
+            "instructions": "Evaluate the directional sentiment towards the predicted event happening (0: strongly bearish/unlikely, 1: somewhat bearish, 2: neutral/mixed, 3: somewhat bullish, 4: strongly bullish/likely)",
+            "criteria": [
+                "Strongly bearish / highly unlikely or negative outcome",
+                "Somewhat bearish / leaning negative or lower odds",
+                "Neutral / mixed / no clear directional impact",
+                "Somewhat bullish / leaning positive or higher odds",
+                "Strongly bullish / highly likely or positive outcome confirmed"
+            ]
+        },
+        "is_material": {
+            "type": "noul",
+            "instructions": "Does this news contain material, concrete factual information directly relevant to resolving the prediction market?"
         }
     }
 
     try:
-        resp = requests.post(
-            JEV_API_ENDPOINT,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            },
-            json=payload,
-            timeout=JEV_TIMEOUT_SECONDS
-        )
-
-        if resp.status_code == 200:
-            data = resp.json()
-            answers = data.get("answers", {})
-            sentiment_ans = answers.get("sentiment", {})
-            material_ans = answers.get("is_material", {})
-
-            # 0~4 归一化映射到 -1.0 ~ +1.0
-            raw_score = float(sentiment_ans.get("score", 2.0))
-            normalized_score = round((raw_score - 2.0) / 2.0, 3)
-            normalized_score = max(-1.0, min(1.0, normalized_score))
-
-            confidence = float(sentiment_ans.get("confidence", 0.5))
-            material_prob = float(material_ans.get("noul", 0.5))
-
-            if normalized_score > 0.1:
-                label = "positive"
-            elif normalized_score < -0.1:
-                label = "negative"
-            else:
-                label = "neutral"
-
-            res = {
-                "score": normalized_score,
-                "label": label,
-                "confidence": round(confidence, 3),
-                "is_material": material_prob,
-                "keywords": [],
-                "explanation": f"Jev System 1: {normalized_score:+.2f} (置信度: {confidence:.2f}, 实质性: {material_prob:.2f})",
-                "source": "jev"
-            }
-            _sentiment_cache.set(cache_key, res)
-            return res
-        else:
-            return {"score": 0, "label": "neutral", "confidence": 0, "keywords": [], "explanation": f"Jev HTTP {resp.status_code}", "source": "jev_failed"}
+        answers = jev_ask(state, questions, timeout=3.0)
+    except JevUnavailableError as e:
+        source = "jev_failed" if e.reason in ("http_error", "bad_response") else "jev_error"
+        return {"score": 0, "label": "neutral", "confidence": 0, "keywords": [], "explanation": f"Jev不可用({e.reason}): {e.detail[:40]}", "source": source}
     except Exception as e:
         return {"score": 0, "label": "neutral", "confidence": 0, "keywords": [], "explanation": f"Jev异常: {str(e)[:50]}", "source": "jev_error"}
+
+    sentiment_ans = answers.get("sentiment", {})
+    material_ans = answers.get("is_material", {})
+
+    # 0~4 归一化映射到 -1.0 ~ +1.0
+    try:
+        raw_score = float(sentiment_ans.get("score", 2.0))
+        confidence = float(sentiment_ans.get("confidence", 0.5))
+        material_prob = float(material_ans.get("noul", 0.5))
+    except (ValueError, TypeError):
+        return {"score": 0, "label": "neutral", "confidence": 0, "keywords": [], "explanation": "Jev返回非数值，降级", "source": "jev_error"}
+
+    normalized_score = round((raw_score - 2.0) / 2.0, 3)
+    normalized_score = max(-1.0, min(1.0, normalized_score))
+
+    if normalized_score > 0.1:
+        label = "positive"
+    elif normalized_score < -0.1:
+        label = "negative"
+    else:
+        label = "neutral"
+
+    res = {
+        "score": normalized_score,
+        "label": label,
+        "confidence": round(confidence, 3),
+        "is_material": material_prob,
+        "keywords": [],
+        "explanation": f"Jev System 1: {normalized_score:+.2f} (置信度: {confidence:.2f}, 实质性: {material_prob:.2f})",
+        "source": "jev"
+    }
+    _sentiment_cache.set(cache_key, res)
+    return res
 
 
 def analyze_sentiment_with_llm(text, market_context=""):
@@ -557,9 +526,9 @@ def analyze_news_sentiment(news_list, market_context="", use_jev=True):
         
         # 阶梯执行：1. Jev System 1 极速打分 (若启用) -> 2. LLM 生成式分析 -> 3. Simple 规则打分
         sentiment = None
-        if use_jev and (TYPESAFE_API_KEY or _get_typesafe_key()):
+        if use_jev:
             sentiment = analyze_sentiment_jev(text, market_context)
-            
+
         if not sentiment or sentiment.get("source") in ("jev_failed", "jev_error") or sentiment.get("confidence", 0) < 0.2:
             sentiment = analyze_sentiment_with_llm(text, market_context)
             # 降级条件：API不可用(confidence=0)或LLM置信度过低(<0.3)

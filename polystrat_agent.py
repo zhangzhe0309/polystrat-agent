@@ -28,7 +28,7 @@ load_dotenv()  # 也加载项目目录的 .env（如果有）
 # 导入自定义模块
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from news_search import search_news_for_market
-from sentiment_analysis import analyze_news_sentiment, analyze_sentiment_simple
+from sentiment_analysis import analyze_sentiment_simple
 from risk_management import should_trade, calculate_position_size, get_risk_report, set_trade_log_path as set_risk_log_path
 from onchain_monitor import get_onchain_signal
 from adaptive_weights import calculate_adaptive_weights, load_trade_history, set_trade_log_path as set_adaptive_log_path
@@ -86,7 +86,7 @@ USE_DEBATE_MODE = True  # True=使用多空辩论, False=使用传统投票
 MIN_VALID_DEBATE_CALLS = 1  # 最少成功调用数（辩论模式）
 
 # === ⚡ JEV System 1 快反射开关 ===
-USE_JEV_FAST_REACTOR = True  # 启用 JEV 极速盘口前置初筛与风控哨兵 (100ms)
+USE_JEV_FAST_REACTOR = True  # 启用 JEV 盘口前置初筛与情感快打分（下单守门链不含 JEV，微结构风控由 clob_spread 承担）
 
 # 按优先级排序（只有一个 Groq provider，无需排序）
 # LLM_PROVIDERS.sort(key=lambda x: x.get("priority", 99))
@@ -1663,6 +1663,7 @@ def main():
     _funnel = [
         ('price_range', '价格区间外'), ('liquidity', '流动性不足'),
         ('category', '类别不符'), ('dedup', '去重(24h已交易)'),
+        ('jev_triage', 'JEV初筛拦截'),
         ('llm_failed', 'LLM分析失败'), ('low_disagreement', '分歧不足'),
         ('high_disagreement', '分歧过大'), ('low_confidence', '置信度不足'),
         ('signal_fallback', '信号回退≥2'), ('low_price_edge', '低价edge不足'),
@@ -1705,6 +1706,18 @@ def main():
     if disagreement_filtered:
         _dvals = sorted(disagreement_filtered)
         print(f"   💡 分歧过滤样本(阈值 {SWEET_SPOT_CONFIG['min_disagreement']}-{SWEET_SPOT_CONFIG['max_disagreement']}%): {[f'{d:.1f}%' for d in _dvals]}")
+
+    # ⚡ JEV 健康统计（降级/熔断可观测：哨兵失效不再静默）
+    if USE_JEV_FAST_REACTOR:
+        try:
+            from jev_client import get_stats as _jev_stats
+            _js = _jev_stats()
+            _circuit = "open(熔断中)" if _js["circuit_open"] else "closed"
+            print(f"   ⚡ JEV: 调用 {_js['calls']} | 成功 {_js['successes']} | 失败 {_js['failures']} | 熔断 {_circuit}")
+            if _js["failures"] > 0:
+                print(f"      失败分布: {_js['failures_by_reason']} | 最近错误: {_js['last_error'][:80]}")
+        except Exception as _e:
+            print(f"   ⚡ JEV: 统计不可用 ({_e})")
 
 
 if __name__ == "__main__":

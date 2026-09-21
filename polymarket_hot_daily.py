@@ -57,13 +57,13 @@ def fetch_hot_markets():
 
         if isinstance(prices, str):
             try: prices = json.loads(prices)
-            except: continue
+            except (ValueError, TypeError): continue
         if isinstance(outcomes, str):
             try: outcomes = json.loads(outcomes)
-            except: continue
+            except (ValueError, TypeError): continue
 
         ql = q.lower()
-        if any(k in ql for k in ['fed', 'interest rate', 'rate', 'inflation', 'recession', 'gdp', 'yield', 'treasury']):
+        if any(k in ql for k in ['fed', 'interest rate', 'inflation', 'recession', 'gdp', 'yield', 'treasury']):
             cat = "macro"
         elif any(k in ql for k in ['president', 'election', 'trump', 'biden', 'hegseth', 'senate', 'governor', 'war', 'israel', 'iran', 'ukraine', 'russia']):
             cat = "politics"
@@ -78,7 +78,7 @@ def fetch_hot_markets():
         if prices and outcomes and len(prices) >= 2:
             try:
                 p_desc = f"{outcomes[0]}: {float(prices[0])*100:.1f}% | {outcomes[1]}: {float(prices[1])*100:.1f}%"
-            except:
+            except (ValueError, TypeError, IndexError):
                 pass
 
         score = min(10, max(3, int(vol / 250000)))

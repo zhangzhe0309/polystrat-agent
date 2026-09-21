@@ -1,87 +1,150 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-阶段 2: Jev 盘口前置初筛门禁单测与零信任审查
+阶段 2: JEV 盘口初筛门禁单元测试
+mock jev_client 传输层，验证阻断阈值边界值、静态拦截、默认值、fail-open。零网络。
 """
 
-import sys
 import os
-import time
+import sys
+import unittest
+from unittest.mock import patch, MagicMock
 
-sys.path.insert(0, "/root/polystrat-agent")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import jev_client
 from decision_engine import AutonomousDecisionEngine
 
-def test_phase2():
-    print("==================================================")
-    print("开始阶段 2 测试: Jev 盘口极速前置初筛与门禁断言")
-    print("==================================================")
 
-    engine = AutonomousDecisionEngine()
-
-    # 1. 优质高潜力市场
-    market_hot = {
-        "title": "Fed interest rate cut in upcoming October FOMC meeting?",
-        "description": "Resolves YES if Federal Reserve cuts rates by at least 25bps at the October meeting.",
-        "price": 0.65,
-        "liquidity": 350000
+def _jev_resp(choice="high_potential", conf=0.9, noul=0.8):
+    """构造 jev_ask 成功响应。"""
+    m = MagicMock()
+    m.status_code = 200
+    m.json.return_value = {
+        "answers": {
+            "tradability": {"choice": choice, "confidence": conf},
+            "is_catalyst_driven": {"noul": noul},
+        }
     }
-    t0 = time.time()
-    res_hot = engine.fast_triage_market(market_hot)
-    t_hot = round((time.time() - t0) * 1000, 1)
-    print(f"\n[测试 1: 优质宏观盘口初筛]")
-    print(f"耗时: {t_hot}ms | 放行: {res_hot['pass']} | 分类: {res_hot['category']} | 原因: {res_hot['reason']}")
-    assert res_hot['pass'] is True, "优质盘口应被放行"
-    assert res_hot['category'] in ("high_potential", "speculative_acceptable")
-    assert t_hot < 1500
+    return m
 
-    # 2. 荒谬/超长尾死盘
-    market_junk = {
-        "title": "Will humans confirm existence of ghosts or paranormal spirits before year 2100?",
-        "description": "Resolves YES if UN officially declares existence of ghosts.",
-        "price": 0.02,
-        "liquidity": 6000
+
+def _market(**overrides):
+    base = {
+        "title": "Will BTC hit 150k by Dec 31?",
+        "description": "Resolves YES if price trades above threshold.",
+        "price": 0.42,
+        "liquidity": 50000,
     }
-    t0 = time.time()
-    res_junk = engine.fast_triage_market(market_junk)
-    t_junk = round((time.time() - t0) * 1000, 1)
-    print(f"\n[测试 2: 荒谬长尾垃圾盘口拦截]")
-    print(f"耗时: {t_junk}ms | 放行: {res_junk['pass']} | 分类: {res_junk['category']} | 原因: {res_junk['reason']}")
-    assert res_junk['pass'] is False, "垃圾盘口应被拦截"
-    assert t_junk < 1500
+    base.update(overrides)
+    return base
 
-    # 3. 超低流动性静态拦截
-    market_low_liq = {
-        "title": "Local municipal election turnout in small village",
-        "description": "Turnout numbers",
-        "price": 0.50,
-        "liquidity": 1500
-    }
-    t0 = time.time()
-    res_low_liq = engine.fast_triage_market(market_low_liq)
-    t_low = round((time.time() - t0) * 1000, 1)
-    print(f"\n[测试 3: 低流动性前置静态拦截]")
-    print(f"耗时: {t_low}ms | 放行: {res_low_liq['pass']} | 原因: {res_low_liq['reason']}")
-    assert res_low_liq['pass'] is False
-    assert t_low < 10, "静态拦截耗时应极低 (<10ms)"
 
-    # 4. 零信任审查: 故障注入模拟 Jev 接口挂掉
-    print(f"\n[测试 4: 零信任审查 - Jev 接口故障降级]")
-    import decision_engine
-    old_endpoint = decision_engine.JEV_API_ENDPOINT
-    decision_engine.JEV_API_ENDPOINT = "https://invalid-jev-domain-12345.ai/v1"
-    
-    t0 = time.time()
-    res_failover = engine.fast_triage_market(market_hot)
-    t_fail = round((time.time() - t0) * 1000, 1)
-    print(f"降级耗时: {t_fail}ms | 放行: {res_failover['pass']} | 原因: {res_failover['reason']}")
-    assert res_failover['pass'] is True, "Jev 故障时应安全放行降级至后续流程"
-    
-    # 恢复配置
-    decision_engine.JEV_API_ENDPOINT = old_endpoint
+class TriageTestCase(unittest.TestCase):
+    """公共基类：隔离熔断/key。"""
 
-    print("\n==================================================")
-    print("阶段 2 单元测试与零信任审查全部通过！状态：合格")
-    print("==================================================")
+    def setUp(self):
+        jev_client.reset()
+        env_patcher = patch.dict(os.environ, {"TYPESAFE_API_KEY": "test_key"})
+        env_patcher.start()
+        self.addCleanup(env_patcher.stop)
+        self.engine = AutonomousDecisionEngine()
+
+
+class TestStaticGate(TriageTestCase):
+
+    @patch("jev_client.requests.post")
+    def test_low_liquidity_static_block(self, mock_post):
+        res = self.engine.fast_triage_market(_market(liquidity=1500))
+        self.assertFalse(res["pass"])
+        self.assertEqual(res["category"], "untradable_junk")
+        self.assertIn("流动性极低", res["reason"])
+        mock_post.assert_not_called()  # 静态拦截零网络
+
+
+class TestBlockThresholds(TriageTestCase):
+
+    @patch("jev_client.requests.post")
+    def test_junk_blocked_at_boundary(self, mock_post):
+        # conf=0.60 恰好触发（>=0.60 含边界）
+        mock_post.return_value = _jev_resp(choice="untradable_junk", conf=0.60, noul=0.9)
+        res = self.engine.fast_triage_market(_market())
+        self.assertFalse(res["pass"])
+        self.assertIn("长尾死盘", res["reason"])
+
+    @patch("jev_client.requests.post")
+    def test_junk_below_boundary_passes(self, mock_post):
+        # conf=0.59 未达置信门 → 不按 junk 阻断
+        mock_post.return_value = _jev_resp(choice="untradable_junk", conf=0.59, noul=0.9)
+        res = self.engine.fast_triage_market(_market())
+        self.assertTrue(res["pass"])
+
+    @patch("jev_client.requests.post")
+    def test_no_catalyst_blocked_at_boundary(self, mock_post):
+        # noul=0.14 < 0.15 且 conf=0.70 → 阻断
+        mock_post.return_value = _jev_resp(choice="speculative_acceptable", conf=0.70, noul=0.14)
+        res = self.engine.fast_triage_market(_market())
+        self.assertFalse(res["pass"])
+        self.assertIn("缺乏新闻催化剂", res["reason"])
+
+    @patch("jev_client.requests.post")
+    def test_no_catalyst_at_0p15_passes(self, mock_post):
+        # noul=0.15 非 <0.15 → 放行
+        mock_post.return_value = _jev_resp(choice="speculative_acceptable", conf=0.70, noul=0.15)
+        res = self.engine.fast_triage_market(_market())
+        self.assertTrue(res["pass"])
+
+    @patch("jev_client.requests.post")
+    def test_no_catalyst_low_confidence_passes(self, mock_post):
+        # noul=0.10 但 conf=0.69 < 0.70 → 置信门未达，放行
+        mock_post.return_value = _jev_resp(choice="speculative_acceptable", conf=0.69, noul=0.10)
+        res = self.engine.fast_triage_market(_market())
+        self.assertTrue(res["pass"])
+
+
+class TestDefaultsAndPass(TriageTestCase):
+
+    @patch("jev_client.requests.post")
+    def test_defaults_when_answers_empty(self, mock_post):
+        # answers 空 → choice 默认 speculative_acceptable, conf 0.5, noul 0.5 → 放行
+        m = MagicMock()
+        m.status_code = 200
+        m.json.return_value = {"answers": {}}
+        mock_post.return_value = m
+        res = self.engine.fast_triage_market(_market())
+        self.assertTrue(res["pass"])
+        self.assertEqual(res["category"], "speculative_acceptable")
+
+    @patch("jev_client.requests.post")
+    def test_good_market_passes(self, mock_post):
+        mock_post.return_value = _jev_resp(choice="high_potential", conf=0.9, noul=0.8)
+        res = self.engine.fast_triage_market(_market())
+        self.assertTrue(res["pass"])
+        self.assertEqual(res["category"], "high_potential")
+
+
+class TestFailOpen(TriageTestCase):
+
+    @patch("jev_client.requests.post")
+    def test_http_error_fail_open(self, mock_post):
+        mock_post.return_value = MagicMock(status_code=500, json=MagicMock(return_value={}))
+        res = self.engine.fast_triage_market(_market())
+        self.assertTrue(res["pass"])
+        self.assertEqual(res["category"], "unknown")
+        self.assertIn("降级放行", res["reason"])
+
+    @patch("jev_client.requests.post")
+    def test_circuit_open_fail_open(self, mock_post):
+        # 触发熔断（3 次网络失败）后，初筛放行且不再发网
+        mock_post.side_effect = jev_client.requests.exceptions.Timeout()
+        for _ in range(3):
+            self.engine.fast_triage_market(_market())
+        calls_after_breaker = mock_post.call_count
+        res = self.engine.fast_triage_market(_market())
+        self.assertTrue(res["pass"])
+        self.assertIn("circuit_open", res["reason"])
+        self.assertEqual(mock_post.call_count, calls_after_breaker)
+
 
 if __name__ == "__main__":
-    test_phase2()
+    unittest.main(verbosity=2)
