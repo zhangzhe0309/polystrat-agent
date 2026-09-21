@@ -1,0 +1,1 @@
+/root/.hermes/scripts/polystrat_cron_runner.py

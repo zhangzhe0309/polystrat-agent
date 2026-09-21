@@ -23,15 +23,38 @@ GuardRail 模式：将分散的风险检查统一为串行守门链。
 """
 
 from polystrat_logger import log, log_error
+import os
+import json
+import time
+import requests
+
+# Jev 下单前毫秒级防踩踏风控配置
+JEV_API_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
+JEV_MODEL = "jev-latest"
+JEV_GUARD_TIMEOUT = 2.5
+
+def _get_typesafe_key():
+    k = os.environ.get("TYPESAFE_API_KEY", "")
+    if not k and os.path.exists("/root/.hermes/.env"):
+        try:
+            with open("/root/.hermes/.env", "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("TYPESAFE_API_KEY="):
+                        k = line.strip().split("=", 1)[1]
+                        break
+        except Exception:
+            pass
+    return k
 
 # ============ 配置 ============
 
 GUARDRAIL_CONFIG = {
     "enabled": True,
-    # 检查项顺序（从轻到重）
+    # 检查项顺序（从轻到重，Jev 快反射置于前置高频位）
     "checks": [
         "circuit_breaker",      # 断路器（最快，纯内存状态）
         "trade_limits",         # 交易限额（快速）
+        "jev_fast_guardrail",   # ⚡ Jev 毫秒级防踩踏与盘口毒性风控 (100ms)
         "correlation",          # 市场相关性（中等）
         "volatility",           # 波动率过滤（中等）
         "risk_management",      # 风险管理（较重，需要计算）
@@ -191,6 +214,87 @@ def check_volatility_filter(market, regime_data, config=None):
     return {"pass": True, "position_scale": 1.0, "reason": f"波动率正常(σ={price_std:.0%})"}
 
 
+def check_jev_fast_guardrail(market: dict, context: dict) -> dict:
+    """
+    ⚡ Jev 毫秒级下单前防踩踏与盘口毒性哨兵
+    在最终下单前的最后 100ms 快速评估：
+    1. is_toxic_flow (Noul): 是否存在流动性踩踏或规则恶意操纵。
+    2. execution_risk (Score): 盘口执行风险量化 (0~3)。
+    """
+    api_key = _get_typesafe_key()
+    if not api_key:
+        return {"pass": True, "reason": "JEV未配置，放行", "confidence": 0.0}
+
+    title = market.get("title", "")
+    price = context.get("intended_price", market.get("price", 0.5))
+    direction = context.get("direction", "Yes")
+    liquidity = market.get("liquidity", 0)
+    confidence = context.get("confidence", 0.5)
+
+    state = (
+        f"Order Intent: BUY {direction} at price {price:.2f}\n"
+        f"Market Title: {title}\n"
+        f"Liquidity Pool: ${liquidity:,.0f}\n"
+        f"Model Confidence: {confidence:.2f}"
+    )
+
+    payload = {
+        "model": JEV_MODEL,
+        "state": state,
+        "questions": {
+            "execution_risk": {
+                "type": "score",
+                "instructions": "Rate the microstructural execution risk and potential for liquidity trap or adverse manipulation (0: low/safe, 1: acceptable, 2: elevated risk, 3: hazardous toxic flow)",
+                "criteria": [
+                    "Safe normal market with fair price discovery",
+                    "Acceptable slight variance or minor illiquidity",
+                    "Elevated risk with potential spread widening or dispute",
+                    "Hazardous toxic flow, extreme manipulation or liquidity trap"
+                ]
+            },
+            "is_toxic_flow": {
+                "type": "noul",
+                "instructions": "Is this order exhibiting hazardous toxic flow, manipulative spoofing, or an extreme adverse selection risk?"
+            }
+        }
+    }
+
+    try:
+        resp = requests.post(
+            JEV_API_ENDPOINT,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=JEV_GUARD_TIMEOUT
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            answers = data.get("answers", {})
+            risk_ans = answers.get("execution_risk", {})
+            toxic_ans = answers.get("is_toxic_flow", {})
+
+            risk_score = float(risk_ans.get("score", 0.0))
+            risk_conf = float(risk_ans.get("confidence", 0.5))
+            toxic_prob = float(toxic_ans.get("noul", 0.0))
+
+            # 强熔断门禁：危险概率 > 0.75 或 风险分值 >= 2.3
+            if toxic_prob >= 0.75 or (risk_score >= 2.3 and risk_conf >= 0.65):
+                return {
+                    "pass": False,
+                    "reason": f"Jev风控熔断: 检测到盘口高危毒性流动 (危险度: {toxic_prob:.2f}, 风险分: {risk_score:.2f})",
+                    "confidence": risk_conf
+                }
+
+            return {
+                "pass": True,
+                "reason": f"Jev风控放行 (危险度: {toxic_prob:.2f}, 风险分: {risk_score:.2f})",
+                "confidence": risk_conf
+            }
+        else:
+            return {"pass": True, "reason": f"Jev HTTP {resp.status_code}，降级放行", "confidence": 0.0}
+    except Exception as e:
+        return {"pass": True, "reason": f"Jev异常降级: {str(e)[:30]}", "confidence": 0.0}
+
+
 def guard_rail_check(market, context, config=None):
     """
     统一守门检查 — 单一入口
@@ -251,6 +355,19 @@ def guard_rail_check(market, context, config=None):
             return _blocked_result(f"交易限额: {limit_reason}", checks)
     except Exception as e:
         warnings.append(f"限额检查失败: {e}")
+    
+    # 2.5 ⚡ Jev 毫秒级盘口毒性与防踩踏哨兵
+    try:
+        jev_guard = check_jev_fast_guardrail(market, context)
+        checks.append({
+            "name": "jev_fast_guardrail",
+            "pass": jev_guard["pass"],
+            "detail": jev_guard["reason"],
+        })
+        if not jev_guard["pass"]:
+            return _blocked_result(f"JEV哨兵: {jev_guard['reason']}", checks)
+    except Exception as e:
+        warnings.append(f"JEV哨兵检查失败: {e}")
     
     # 3. 市场相关性
     try:

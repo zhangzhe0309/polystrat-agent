@@ -21,8 +21,30 @@
 日期: 2026-07-10
 """
 
+import os
+import json
+import time
+import requests
 from datetime import datetime, timezone
 from collections import defaultdict
+
+# Jev 快速盘口初筛配置
+JEV_API_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
+JEV_MODEL = "jev-latest"
+JEV_TRIAGE_TIMEOUT = 3.0
+
+def _get_typesafe_key():
+    k = os.environ.get("TYPESAFE_API_KEY", "")
+    if not k and os.path.exists("/root/.hermes/.env"):
+        try:
+            with open("/root/.hermes/.env", "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("TYPESAFE_API_KEY="):
+                        k = line.strip().split("=", 1)[1]
+                        break
+        except Exception:
+            pass
+    return k
 
 
 class AutonomousDecisionEngine:
@@ -40,6 +62,114 @@ class AutonomousDecisionEngine:
         self.total_decisions = 0
         self.yes_decisions = 0
         self.no_decisions = 0
+
+    def fast_triage_market(self, market: dict) -> dict:
+        """
+        ⚡ JEV System 1 极速盘口初筛门禁 (100ms~200ms)
+        在前置扫描循环中快速剥离长尾死盘、无催化剂市场，避免无效调用重量级大模型。
+        
+        Returns:
+            dict: {
+                'pass': bool,
+                'category': str ('high_potential' / 'speculative_acceptable' / 'untradable_junk'),
+                'is_catalyst_driven': float,
+                'confidence': float,
+                'reason': str
+            }
+        """
+        title = market.get('title', '')
+        desc = market.get('description', '')[:300]
+        price = market.get('price', 0.5)
+        liquidity = market.get('liquidity', 0)
+
+        # 基础静态初筛
+        if liquidity < 3000:
+            return {
+                'pass': False,
+                'category': 'untradable_junk',
+                'is_catalyst_driven': 0.0,
+                'confidence': 1.0,
+                'reason': f'流动性极低 (${liquidity:,.0f} < $3k)'
+            }
+
+        api_key = _get_typesafe_key()
+        if not api_key:
+            # 降级容灾：若未配置 Key 则放行，由后续环节处理
+            return {'pass': True, 'category': 'unknown', 'is_catalyst_driven': 0.5, 'confidence': 0.0, 'reason': 'JEV未配置，放行'}
+
+        state = (
+            f"Title: {title}\n"
+            f"Description: {desc}\n"
+            f"Current Price: {price:.2f}\n"
+            f"Liquidity: ${liquidity:,.0f}"
+        )
+
+        payload = {
+            "model": JEV_MODEL,
+            "state": state,
+            "questions": {
+                "tradability": {
+                    "type": "choice",
+                    "instructions": "Evaluate the tradability quality of this prediction market for an algorithmic trading bot",
+                    "criteria": {
+                        "high_potential": "High-interest active market, clear upcoming event date, substantial real-world public discussion or catalyst",
+                        "speculative_acceptable": "Niche or secondary market with moderate activity and plausible trading opportunity",
+                        "untradable_junk": "Vague or arbitrary resolution rules, zero ongoing catalysts, ultra-long-horizon dormant market, or meme garbage"
+                    }
+                },
+                "is_catalyst_driven": {
+                    "type": "noul",
+                    "instructions": "Is there an ongoing news cycle, impending deadline, or public event actively driving this market odds?"
+                }
+            }
+        }
+
+        try:
+            resp = requests.post(
+                JEV_API_ENDPOINT,
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json=payload,
+                timeout=JEV_TRIAGE_TIMEOUT
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                answers = data.get("answers", {})
+                tradability_ans = answers.get("tradability", {})
+                catalyst_ans = answers.get("is_catalyst_driven", {})
+
+                category = tradability_ans.get("choice", "speculative_acceptable")
+                conf = float(tradability_ans.get("confidence", 0.5))
+                catalyst_prob = float(catalyst_ans.get("noul", 0.5))
+
+                # 硬阻断门禁：判定为 junk 或 (催化剂极低 且 置信度高)
+                if category == "untradable_junk" and conf >= 0.60:
+                    return {
+                        'pass': False,
+                        'category': category,
+                        'is_catalyst_driven': catalyst_prob,
+                        'confidence': conf,
+                        'reason': f'JEV判定为无价值长尾死盘 (置信度: {conf:.2f})'
+                    }
+                if catalyst_prob < 0.15 and conf >= 0.70:
+                    return {
+                        'pass': False,
+                        'category': category,
+                        'is_catalyst_driven': catalyst_prob,
+                        'confidence': conf,
+                        'reason': f'JEV判定缺乏新闻催化剂与波动性 (催化概率: {catalyst_prob:.2f})'
+                    }
+
+                return {
+                    'pass': True,
+                    'category': category,
+                    'is_catalyst_driven': catalyst_prob,
+                    'confidence': conf,
+                    'reason': f'JEV初筛放行: {category} (催化度: {catalyst_prob:.2f}, 置信度: {conf:.2f})'
+                }
+            else:
+                return {'pass': True, 'category': 'unknown', 'is_catalyst_driven': 0.5, 'confidence': 0.0, 'reason': f'JEV HTTP {resp.status_code}，降级放行'}
+        except Exception as e:
+            return {'pass': True, 'category': 'unknown', 'is_catalyst_driven': 0.5, 'confidence': 0.0, 'reason': f'JEV异常: {str(e)[:40]}，降级放行'}
 
     def make_decision(self, market, signals, regime_data, strategy_pool):
         """

@@ -421,7 +421,7 @@ class TestLLMSentimentAnalysis(unittest.TestCase):
         """LLM 置信度低时自动降级为简单分析"""
         mock_llm.return_value = {"score": 0, "label": "neutral", "confidence": 0.1, "keywords": [], "explanation": "低置信度"}
         news_list = [{"text": "bullish market outlook positive"}]
-        result = self.analyze_news_sentiment(news_list)
+        result = self.analyze_news_sentiment(news_list, use_jev=False)
         # 降级后简单分析应识别到正面词汇
         self.assertGreater(result["overall_score"], 0)
 
@@ -436,9 +436,18 @@ class TestLLMSentimentAnalysis(unittest.TestCase):
         result = self.analyze_news_sentiment([
             {"text": "positive news"},
             {"text": "negative news"},
-        ])
+        ], use_jev=False)
         # 加权平均应向高置信度的正面倾斜
         self.assertGreater(result["overall_score"], 0)
+
+    def test_jev_system1_sentiment_integration(self):
+        """⚡ Jev System 1 情绪打分集成测试"""
+        from sentiment_analysis import analyze_sentiment_jev
+        res = analyze_sentiment_jev("Massive breakthrough confirmed, market strongly rallying.", "Tech Market")
+        self.assertIn("score", res)
+        self.assertIn("confidence", res)
+        self.assertGreaterEqual(res["score"], -1.0)
+        self.assertLessEqual(res["score"], 1.0)
 
 
 class TestFileLock(unittest.TestCase):

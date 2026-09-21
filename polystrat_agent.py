@@ -85,6 +85,9 @@ LLM_PROVIDERS = [
 USE_DEBATE_MODE = True  # True=使用多空辩论, False=使用传统投票
 MIN_VALID_DEBATE_CALLS = 1  # 最少成功调用数（辩论模式）
 
+# === ⚡ JEV System 1 快反射开关 ===
+USE_JEV_FAST_REACTOR = True  # 启用 JEV 极速盘口前置初筛与风控哨兵 (100ms)
+
 # 按优先级排序（只有一个 Groq provider，无需排序）
 # LLM_PROVIDERS.sort(key=lambda x: x.get("priority", 99))
 
@@ -938,6 +941,19 @@ def main():
             print(f"⏭️ 跳过已交易市场: {title[:40]}...")
             continue
 
+        # === ⚡ JEV System 1 极速盘口前置初筛门禁 ===
+        if USE_JEV_FAST_REACTOR:
+            try:
+                triage_res = decision_engine.fast_triage_market(market)
+                if not triage_res.get('pass', True):
+                    filter_stats['jev_triage'] = filter_stats.get('jev_triage', 0) + 1
+                    print(f"⚡ [JEV System 1] 跳过死盘/无催化剂: {title[:40]}... ({triage_res.get('reason', '')})")
+                    continue
+                else:
+                    print(f"⚡ [JEV System 1] 初筛放行: {title[:40]}... ({triage_res.get('category')})")
+            except Exception as e:
+                print(f"⚠️ JEV初筛异常放行: {e}")
+
         # 2. 搜索相关新闻（使用智能关键词 + news_search 模块）
         search_queries = get_search_queries(title, category, max_queries=1)
         search_query = search_queries[0] if search_queries else title[:50]
@@ -974,23 +990,27 @@ def main():
             news_text = ""
             print(f"⚠️ 新闻搜索失败: {e}")
 
-        # 3. 情感分析（简化版，使用关键词分析，避免LLM超时）
+        # 3. 情感分析（优先使用 JEV 极速打分，降级到简单分析）
         try:
-            # 使用简单情感分析（快速）
-            from sentiment_analysis import analyze_sentiment_simple
+            from sentiment_analysis import analyze_sentiment_jev, analyze_sentiment_simple
 
             if news_list:
                 sentiment_scores = []
                 for news in news_list[:2]:
                     text = news.get("title", "") + " " + news.get("description", "")
-                    result = analyze_sentiment_simple(text)
+                    if USE_JEV_FAST_REACTOR:
+                        result = analyze_sentiment_jev(text, title)
+                        if result.get("source") in ("jev_failed", "jev_error"):
+                            result = analyze_sentiment_simple(text)
+                    else:
+                        result = analyze_sentiment_simple(text)
                     sentiment_scores.append(result["score"])
                 sentiment_score = (
                     sum(sentiment_scores) / len(sentiment_scores)
                     if sentiment_scores
                     else 0
                 )
-                sentiment_confidence = 0.5
+                sentiment_confidence = 0.6 if USE_JEV_FAST_REACTOR else 0.5
             else:
                 sentiment_score = 0
                 sentiment_confidence = 0
