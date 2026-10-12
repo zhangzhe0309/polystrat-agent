@@ -1,2 +1,3 @@
 #!/usr/bin/env bash
-echo "hello"
+set -e
+python3 -m unittest discover -s . -p "test_*.py"

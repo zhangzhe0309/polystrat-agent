@@ -391,7 +391,9 @@ class StrategyDiscoverer:
         if STRATEGY_POOL_PATH.exists():
             try:
                 return json.loads(STRATEGY_POOL_PATH.read_text())
-            except:
+            except Exception as e:
+                from polystrat_logger import log_error
+                log_error("strategy_discovery", str(e))
                 return {}
         return {}
     

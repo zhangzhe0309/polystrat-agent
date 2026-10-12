@@ -26,10 +26,16 @@ def get_top_markets():
         
         if isinstance(prices, str):
             try: prices = json.loads(prices)
-            except: continue
+            except Exception as e:
+                from polystrat_logger import log_error
+                log_error("run_report", str(e))
+                continue
         if isinstance(outcomes, str):
             try: outcomes = json.loads(outcomes)
-            except: continue
+            except Exception as e:
+                from polystrat_logger import log_error
+                log_error("run_report", str(e))
+                continue
             
         if not prices or not outcomes or len(prices) < 2:
             continue
@@ -37,7 +43,9 @@ def get_top_markets():
         try:
             p1 = float(prices[0])
             p2 = float(prices[1])
-        except:
+        except Exception as e:
+            from polystrat_logger import log_error
+            log_error("run_report", str(e))
             continue
             
         top_markets.append({
