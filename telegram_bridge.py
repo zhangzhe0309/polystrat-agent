@@ -37,25 +37,54 @@ def send_telegram(text: str):
 def signal_detector(pipe):
     """Read lines from subprocess stdout, detect signals, send to TG."""
     last_signal = None
+    trades_executed = 0
+    in_settlement_block = False
+    settlement_buffer = []
+
     for line in iter(pipe.readline, ""):
         if not line:
             break
         line = line.rstrip()
         print(f"[POL] {line}")  # echo to console for debugging
-        # Look for trade execution lines
+
+        # 1. 捕获实际下单行（包含中文标的与方向）
         if "已模拟下单" in line or "已实盘下单" in line:
-            # Simple deduplication: ignore if same line as previous
+            trades_executed += 1
             if line != last_signal:
                 last_signal = line
-                # Optionally shorten or keep full line
-                msg = f"🤖 *PolySignal*: {line}"
+                msg = f"🤖 *PolyStrat 成交通知*:\n{line}"
                 send_telegram(msg)
-        # Also capture summary line at end of run (optional)
+
+        # 2. 捕获结算回报块
+        elif "🎯 【订单结算回报】" in line:
+            in_settlement_block = True
+            settlement_buffer = [line]
+        elif in_settlement_block:
+            if line.startswith("  •") or line.startswith("    -"):
+                settlement_buffer.append(line)
+            else:
+                in_settlement_block = False
+                if settlement_buffer:
+                    msg = "\n".join(settlement_buffer)
+                    send_telegram(msg)
+                    settlement_buffer = []
+
+        # 3. 本轮下单统计行：仅在真正产生下单（trades_executed > 0）时推送汇总，0 笔时必须保持 [SILENT] 静默
         elif "本轮共下单" in line:
-            if line != last_signal:
-                last_signal = line
-                msg = f"📊 *PolySummary*: {line}"
-                send_telegram(msg)
+            match = re.search(r"本轮共下单\s*(\d+)\s*笔", line)
+            count = int(match.group(1)) if match else 0
+            if count > 0:
+                if line != last_signal:
+                    last_signal = line
+                    msg = f"📊 *PolySummary*: {line}"
+                    send_telegram(msg)
+            else:
+                print("[Telegram] [SILENT] 本轮无实际下单成交与结算回报，按通知偏好保持静默")
+
+    # 循环退出时若有未发送的结算回报，补发
+    if in_settlement_block and settlement_buffer:
+        send_telegram("\n".join(settlement_buffer))
+
     pipe.close()
 
 def main():

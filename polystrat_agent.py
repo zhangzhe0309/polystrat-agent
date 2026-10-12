@@ -580,9 +580,9 @@ def format_output(decisions, edge_threshold=None):
             if result:
                 status = result.get("status", "")
                 if status == "DRY_RUN":
-                    lines.append(f"   ✅ 已模拟下单: {direction} ${BET_AMOUNT:.2f}")
+                    lines.append(f"   ✅ 已模拟下单: {direction} ${BET_AMOUNT:.2f} | 标的: {title}")
                 elif status == "SUCCESS":
-                    lines.append(f"   ✅ 已实盘下单: {direction} ${BET_AMOUNT:.2f}")
+                    lines.append(f"   ✅ 已实盘下单: {direction} ${BET_AMOUNT:.2f} | 标的: {title}")
                 else:
                     lines.append(f"   ❌ 下单失败: {result.get('message', '')}")
             else:
