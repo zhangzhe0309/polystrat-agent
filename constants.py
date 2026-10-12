@@ -11,7 +11,10 @@ from pathlib import Path
 # ============================================================
 # 基础路径常量
 # ============================================================
-BASE_DIR = Path("/root/.hermes/profiles/life")
+if os.environ.get("TEST_MODE") == "1":
+    BASE_DIR = Path("/tmp/hermes/profiles/life")
+else:
+    BASE_DIR = Path("/root/.hermes/profiles/life")
 DATA_DIR = BASE_DIR / "data"
 LOG_DIR = BASE_DIR / "home/.hermes/polymarket_bot/logs"
 SCRIPTS_DIR = BASE_DIR / "scripts"

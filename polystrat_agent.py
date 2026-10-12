@@ -259,7 +259,9 @@ def fetch_active_markets(limit=150):
                 if len(price_list) < 1:
                     continue
                 yes_price = float(price_list[0])
-            except Exception:
+            except Exception as e:
+                from polystrat_logger import log_error
+                log_error("polystrat_agent", str(e))
                 continue
 
             # 跳过极端价格（>97¢ 或 <3¢）- 扩大范围
@@ -272,7 +274,9 @@ def fetch_active_markets(limit=150):
                     token_list = json.loads(tokens)
                 else:
                     token_list = tokens
-            except Exception:
+            except Exception as e:
+                from polystrat_logger import log_error
+                log_error("polystrat_agent", str(e))
                 token_list = []
 
             # 解析 outcomes
@@ -281,7 +285,9 @@ def fetch_active_markets(limit=150):
                     outcome_list = json.loads(outcomes)
                 else:
                     outcome_list = outcomes
-            except Exception:
+            except Exception as e:
+                from polystrat_logger import log_error
+                log_error("polystrat_agent", str(e))
                 outcome_list = ["Yes", "No"]
 
             # 检测市场分类（优先使用 tags 原生标签解析）
@@ -328,7 +334,9 @@ def search_news(query, max_results=3):
         # 取前 2000 字符作为上下文
         context = clean[:2000]
         return context
-    except Exception:
+    except Exception as e:
+        from polystrat_logger import log_error
+        log_error("polystrat_agent", str(e))
         return ""
 
 
@@ -562,7 +570,9 @@ def format_output(decisions, edge_threshold=None):
                 dt = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
                 days_left = (dt - datetime.now(timezone.utc)).days
                 lines.append(f"   结算: {dt.strftime('%Y-%m-%d')} | 剩余{days_left}天")
-            except Exception:
+            except Exception as e:
+                from polystrat_logger import log_error
+                log_error("polystrat_agent", str(e))
                 pass
 
         if abs(edge) >= effective_threshold and trades_made < MAX_TRADES_PER_RUN:
@@ -695,7 +705,9 @@ def main():
                 else:
                     # 兼容旧记录：无 condition_id 时用 title 小写去重
                     traded_markets_24h.add(t.get("market", "").lower())
-        except Exception:
+        except Exception as e:
+            from polystrat_logger import log_error
+            log_error("polystrat_agent", str(e))
             pass
 
     # 使用自适应权重（包含4信号 + 动态阈值）
@@ -795,7 +807,9 @@ def main():
                     book = get_clob_orderbook(pos.token_id)
                     if book.get("success") and book.get("mid_price", 0) > 0:
                         current_prices[pid] = book["mid_price"]
-                except Exception:
+                except Exception as e:
+                    from polystrat_logger import log_error
+                    log_error("polystrat_agent", str(e))
                     continue
 
             if current_prices:
@@ -829,12 +843,16 @@ def main():
                             realized_pnl = fill_detail.get("realized_pnl", ex.pnl_usd)
                             try:
                                 record_trade_result(realized_pnl)
-                            except Exception:
+                            except Exception as e:
+                                from polystrat_logger import log_error
+                                log_error("polystrat_agent", str(e))
                                 pass
                             try:
                                 from trade_limits import record_close
                                 record_close(ex.exit_size_usdc)
-                            except Exception:
+                            except Exception as e:
+                                from polystrat_logger import log_error
+                                log_error("polystrat_agent", str(e))
                                 pass
                             print(f"   💸 平仓成交({sell_status}): {pos.market_question[:40]} | {ex.stage} | 退出{ex.exit_pct:.0%} @ {actual_sell_price:.4f} | PnL ${realized_pnl:+.2f}")
                         else:
@@ -1538,7 +1556,9 @@ def main():
                             end_dt = (datetime.fromisoformat(_end_str.replace("Z", "+00:00"))
                                       if "T" in _end_str
                                       else datetime.strptime(_end_str, "%Y-%m-%d").replace(tzinfo=timezone.utc))
-                        except Exception:
+                        except Exception as e:
+                            from polystrat_logger import log_error
+                            log_error("polystrat_agent", str(e))
                             pass
                     tp_manager.add_position(
                         position_id=condition_id or title,
@@ -1634,7 +1654,9 @@ def main():
     try:
         judge_report = format_judge_weight_report(TRADE_LOG)
         print(f"\n{judge_report}")
-    except Exception:
+    except Exception as e:
+        from polystrat_logger import log_error
+        log_error("polystrat_agent", str(e))
         pass
     
     # 🆕 策略发现更新
